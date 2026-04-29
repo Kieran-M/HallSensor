@@ -471,6 +471,7 @@ with tab_anim:
 
         fig_path = go.Figure()
 
+        # Trace 0: Path line
         fig_path.add_trace(
             go.Scatter3d(
                 x=anim_path[:, 0],
@@ -482,37 +483,39 @@ with tab_anim:
             )
         )
 
+        # Trace 1: Sensor
         fig_path.add_trace(
             go.Scatter3d(
-                x=[0],
-                y=[0],
-                z=[0],
+                x=[0], y=[0], z=[0],
                 mode="markers",
-                marker=dict(
-                    size=6, color="green", symbol="diamond"
-                ),
+                marker=dict(size=6, color="green", symbol="diamond"),
                 name="Sensor (origin)",
             )
         )
 
-        # Draw hinge pivot indicator
+        # Trace 2: Hinge arm or placeholder
         if motion_type == "Hinge (Door/Lid)":
             fig_path.add_trace(
                 go.Scatter3d(
-                    x=[0],
-                    y=[0],
-                    z=[0],
-                    mode="markers+text",
-                    marker=dict(
-                        size=4, color="orange", symbol="cross"
-                    ),
-                    text=["Pivot"],
-                    textposition="top center",
-                    name="Hinge Pivot",
-                    showlegend=True,
+                    x=[0, anim_path[0, 0]],
+                    y=[0, anim_path[0, 1]],
+                    z=[0, anim_path[0, 2]],
+                    mode="lines",
+                    line=dict(color="orange", width=2),
+                    name="Hinge Arm",
+                    showlegend=False,
+                )
+            )
+        else:
+            fig_path.add_trace(
+                go.Scatter3d(
+                    x=[None], y=[None], z=[None],
+                    mode="none",
+                    showlegend=False,
                 )
             )
 
+        # Trace 3: Magnet marker (animated)
         fig_path.add_trace(
             go.Scatter3d(
                 x=[anim_path[0, 0]],
@@ -524,59 +527,35 @@ with tab_anim:
             )
         )
 
+        # Build frames — only update traces 2 and 3
         frames_3d = []
         slider_steps = []
         for i in range(num_frames):
-            frame_traces = [
-                go.Scatter3d(
-                    x=anim_path[:, 0],
-                    y=anim_path[:, 1],
-                    z=anim_path[:, 2],
-                    mode="lines",
-                    line=dict(color="royalblue", width=3),
-                    name="Magnet Path",
-                ),
-                go.Scatter3d(
-                    x=[0],
-                    y=[0],
-                    z=[0],
-                    mode="markers",
-                    marker=dict(
-                        size=6, color="green", symbol="diamond"
-                    ),
-                    name="Sensor",
-                ),
-            ]
+            frame_data = []
+
+            # Update trace 2: hinge arm or placeholder
             if motion_type == "Hinge (Door/Lid)":
-                # Arm line from pivot to magnet
-                frame_traces.append(
+                frame_data.append(
                     go.Scatter3d(
                         x=[0, anim_path[i, 0]],
                         y=[0, anim_path[i, 1]],
                         z=[0, anim_path[i, 2]],
                         mode="lines",
                         line=dict(color="orange", width=2),
-                        name="Hinge Arm",
                         showlegend=False,
                     )
                 )
             else:
-                frame_traces.append(
+                frame_data.append(
                     go.Scatter3d(
-                        x=[0],
-                        y=[0],
-                        z=[0],
-                        mode="markers",
-                        marker=dict(
-                            size=4,
-                            color="orange",
-                            symbol="cross",
-                        ),
+                        x=[None], y=[None], z=[None],
+                        mode="none",
                         showlegend=False,
                     )
                 )
 
-            frame_traces.append(
+            # Update trace 3: magnet position
+            frame_data.append(
                 go.Scatter3d(
                     x=[anim_path[i, 0]],
                     y=[anim_path[i, 1]],
@@ -588,7 +567,11 @@ with tab_anim:
             )
 
             frames_3d.append(
-                go.Frame(data=frame_traces, name=str(i))
+                go.Frame(
+                    data=frame_data,
+                    traces=[2, 3],
+                    name=str(i),
+                )
             )
 
             if motion_type == "Hinge (Door/Lid)":
@@ -612,9 +595,23 @@ with tab_anim:
 
         fig_path.frames = frames_3d
 
+        all_coords = np.concatenate([anim_path, [[0, 0, 0]]])
+        center = all_coords.mean(axis=0)
+        max_range = np.abs(all_coords - center).max()
+        eye_dist = 1.5
+
+
         fig_path.update_layout(
+            uirevision="constant",
             scene=dict(
-                aspectmode="data",
+                camera=dict(
+                    eye=dict(
+                        x=eye_dist * 0.8,
+                        y=eye_dist * 1.0,
+                        z=eye_dist * 0.6,
+                    ),
+                ),
+                aspectmode="auto",
                 xaxis_title="X (mm)",
                 yaxis_title="Y (mm)",
                 zaxis_title="Z (mm)",
@@ -625,9 +622,7 @@ with tab_anim:
                 dict(
                     type="buttons",
                     showactive=False,
-                    y=0,
-                    x=0.5,
-                    xanchor="center",
+                    y=0, x=0.5, xanchor="center",
                     buttons=[
                         dict(
                             label="▶ Play",
@@ -635,9 +630,7 @@ with tab_anim:
                             args=[
                                 None,
                                 dict(
-                                    frame=dict(
-                                        duration=50, redraw=True
-                                    ),
+                                    frame=dict(duration=50, redraw=True),
                                     fromcurrent=True,
                                     transition=dict(duration=0),
                                 ),
@@ -649,9 +642,7 @@ with tab_anim:
                             args=[
                                 [None],
                                 dict(
-                                    frame=dict(
-                                        duration=0, redraw=False
-                                    ),
+                                    frame=dict(duration=0, redraw=True),
                                     mode="immediate",
                                     transition=dict(duration=0),
                                 ),
