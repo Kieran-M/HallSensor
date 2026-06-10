@@ -371,7 +371,7 @@ with st.sidebar:
     st.download_button("Export CSV", df_static.to_csv(index=False).encode(), "magnet_data.csv", "text/csv")
 
 # --- Main Tabs ---
-tab_static, tab_anim, tab_parts = st.tabs(["Static Analysis", "Animation", "Part Matching"])
+#tab_static, tab_anim, tab_parts = st.tabs(["Static Analysis", "Animation", "Part Matching"])
 
 # with tab_static:
 #     col1, col2 = st.columns(2)
@@ -396,300 +396,299 @@ tab_static, tab_anim, tab_parts = st.tabs(["Static Analysis", "Animation", "Part
 #         )
 #         st.plotly_chart(fig_2d, use_container_width=True)
 
-with tab_anim:
-    st.subheader("Animated Magnet Motion")
+st.subheader("Animated Magnet Motion")
 
-    anim_magnet = create_magnet(shape_type, height, dims, remanence_g)
-    z_offset_default = (height / 2) + z_air_gap
+anim_magnet = create_magnet(shape_type, height, dims, remanence_g)
+z_offset_default = (height / 2) + z_air_gap
 
-    path_kwargs = {}
-    if motion_type in ["Linear X-Sweep", "Linear Y-Sweep"]:
-        path_kwargs = {"sweep_range": sweep_range or 15.0, "z_offset": z_offset_default}
-    elif motion_type == "Linear Z-Sweep":
-        path_kwargs = {"sweep_range": sweep_range or 15.0}
-    elif motion_type == "Circular XY":
-        path_kwargs = {"orbit_radius": orbit_radius or 10.0, "z_offset": orbit_z_offset or 5.0}
-    elif motion_type == "Hinge (Door/Lid)":
-        path_kwargs = {
-            "hinge_radius": hinge_radius or 15.0,
-            "angle_open": hinge_angle_open or 90,
-            "angle_close": hinge_angle_close or 0,
-            "plane": hinge_plane or "XZ (side hinge)",
-            "bounce": hinge_bounce if hinge_bounce is not None else True,
-            "sensor_offset": hinge_sensor_offset or 2.0,
-        }
-    elif motion_type == "Custom Path":
-        path_kwargs = {"waypoints": parse_custom_waypoints(custom_waypoints_str or "0,0,5")}
+path_kwargs = {}
+if motion_type in ["Linear X-Sweep", "Linear Y-Sweep"]:
+    path_kwargs = {"sweep_range": sweep_range or 15.0, "z_offset": z_offset_default}
+elif motion_type == "Linear Z-Sweep":
+    path_kwargs = {"sweep_range": sweep_range or 15.0}
+elif motion_type == "Circular XY":
+    path_kwargs = {"orbit_radius": orbit_radius or 10.0, "z_offset": orbit_z_offset or 5.0}
+elif motion_type == "Hinge (Door/Lid)":
+    path_kwargs = {
+        "hinge_radius": hinge_radius or 15.0,
+        "angle_open": hinge_angle_open or 90,
+        "angle_close": hinge_angle_close or 0,
+        "plane": hinge_plane or "XZ (side hinge)",
+        "bounce": hinge_bounce if hinge_bounce is not None else True,
+        "sensor_offset": hinge_sensor_offset or 2.0,
+    }
+elif motion_type == "Custom Path":
+    path_kwargs = {"waypoints": parse_custom_waypoints(custom_waypoints_str or "0,0,5")}
 
-    try:
-        anim_path = generate_animation_path(motion_type, num_frames, **path_kwargs)
-        anim_fields = compute_animation_fields(anim_magnet, anim_path)
-    except Exception as e:
-        st.error(f"Animation error: {e}")
-        anim_path = None
-        anim_fields = None
+try:
+    anim_path = generate_animation_path(motion_type, num_frames, **path_kwargs)
+    anim_fields = compute_animation_fields(anim_magnet, anim_path)
+except Exception as e:
+    st.error(f"Animation error: {e}")
+    anim_path = None
+    anim_fields = None
 
-    if anim_path is None or anim_fields is None:
-        st.warning("Could not compute animation with current settings.")
-    else:
+if anim_path is None or anim_fields is None:
+    st.warning("Could not compute animation with current settings.")
+else:
 
-        bx = anim_fields[:, 0]
-        by = anim_fields[:, 1]
-        bz = anim_fields[:, 2]
-        b_mag = np.sqrt(bx**2 + by**2 + bz**2)
-        frame_idx = np.arange(num_frames)
+    bx = anim_fields[:, 0]
+    by = anim_fields[:, 1]
+    bz = anim_fields[:, 2]
+    b_mag = np.sqrt(bx**2 + by**2 + bz**2)
+    frame_idx = np.arange(num_frames)
 
-        if motion_type == "Hinge (Door/Lid)":
-            half = num_frames // 2
-            if hinge_bounce:
-                angles_deg = np.concatenate([
-                    np.linspace(hinge_angle_close, hinge_angle_open, half),
-                    np.linspace(hinge_angle_open, hinge_angle_close, num_frames - half),
-                ])
-            else:
-                angles_deg = np.linspace(hinge_angle_close, hinge_angle_open, num_frames)
-            x_axis_data, x_axis_label = angles_deg, "Hinge Angle (°)"
-            slider_prefix = "Angle: "
+    if motion_type == "Hinge (Door/Lid)":
+        half = num_frames // 2
+        if hinge_bounce:
+            angles_deg = np.concatenate([
+                np.linspace(hinge_angle_close, hinge_angle_open, half),
+                np.linspace(hinge_angle_open, hinge_angle_close, num_frames - half),
+            ])
         else:
-            x_axis_data, x_axis_label = frame_idx, "Frame"
-            slider_prefix = "Frame: "
+            angles_deg = np.linspace(hinge_angle_close, hinge_angle_open, num_frames)
+        x_axis_data, x_axis_label = angles_deg, "Hinge Angle (°)"
+        slider_prefix = "Angle: "
+    else:
+        x_axis_data, x_axis_label = frame_idx, "Frame"
+        slider_prefix = "Frame: "
 
-        slider_steps = [
-            dict(
-                args=[
-                    [str(i)],
-                    dict(
-                        frame=dict(duration=50, redraw=True),
-                        mode="immediate",
-                        transition=dict(duration=0),
-                    ),
-                ],
-                label=f"{x_axis_data[i]:.0f}" + ("°" if motion_type == "Hinge (Door/Lid)" else ""),
-                method="animate",
-            )
-            for i in range(num_frames)
-        ]
-
-        play_pause_buttons = [
-            dict(
-                type="buttons",
-                showactive=False,
-                y=0,
-                x=0.5,
-                xanchor="center",
-                buttons=[
-                    dict(
-                        label="▶ Play",
-                        method="animate",
-                        args=[
-                            None,
-                            dict(
-                                frame=dict(duration=50, redraw=True),
-                                fromcurrent=True,
-                                transition=dict(duration=0),
-                            ),
-                        ],
-                    ),
-                    dict(
-                        label="⏸ Pause",
-                        method="animate",
-                        args=[
-                            [None],
-                            dict(
-                                frame=dict(duration=0, redraw=True),
-                                mode="immediate",
-                                transition=dict(duration=0),
-                            ),
-                        ],
-                    ),
-                ],
-            )
-        ]
-
-        slider_layout = [
-            dict(
-                active=0,
-                steps=slider_steps,
-                currentvalue=dict(prefix=slider_prefix, visible=True),
-                pad=dict(t=50),
-            )
-        ]
-
-        df_anim = pd.DataFrame({
-            "Frame": frame_idx,
-            "Magnet_X": anim_path[:, 0],
-            "Magnet_Y": anim_path[:, 1],
-            "Magnet_Z": anim_path[:, 2],
-            "Bx_Gauss": bx,
-            "By_Gauss": by,
-            "Bz_Gauss": bz,
-            "B_Total_Gauss": b_mag,
-        })
-        if motion_type == "Hinge (Door/Lid)":
-            df_anim.insert(1, "Angle_deg", angles_deg)
-
-        st.download_button(
-            "Export Animation Data (CSV)",
-            df_anim.to_csv(index=False).encode(),
-            "animation_data.csv",
-            "text/csv",
+    slider_steps = [
+        dict(
+            args=[
+                [str(i)],
+                dict(
+                    frame=dict(duration=50, redraw=True),
+                    mode="immediate",
+                    transition=dict(duration=0),
+                ),
+            ],
+            label=f"{x_axis_data[i]:.0f}" + ("°" if motion_type == "Hinge (Door/Lid)" else ""),
+            method="animate",
         )
+        for i in range(num_frames)
+    ]
 
-        col_3d, col_2d = st.columns(2)
-
-        with col_3d:
-            st.caption("3D magnet path and sensor position")
-            fig_path = go.Figure()
-
-            # Magnet path (trace 0)
-            fig_path.add_trace(go.Scatter3d(
-                x=anim_path[:, 0], y=anim_path[:, 1], z=anim_path[:, 2],
-                mode="lines", line=dict(color="royalblue", width=3), name="Magnet Path",
-            ))
-
-            # Sensor (trace 1)
-            fig_path.add_trace(go.Scatter3d(
-                x=[0], y=[0], z=[0],
-                mode="markers", marker=dict(size=6, color="green", symbol="diamond"),
-                name="Sensor",
-            ))
-
-            # Hinge arm (trace 2)
-            if motion_type == "Hinge (Door/Lid)":
-                fig_path.add_trace(go.Scatter3d(
-                    x=[0, anim_path[0, 0]], y=[0, anim_path[0, 1]], z=[0, anim_path[0, 2]],
-                    mode="lines", line=dict(color="orange", width=2), showlegend=False,
-                ))
-            else:
-                fig_path.add_trace(go.Scatter3d(
-                    x=[None], y=[None], z=[None], mode="none", showlegend=False,
-                ))
-
-            init_traces = make_magnet_traces(magnet_obj, anim_path[0, 0], anim_path[0, 1], anim_path[0, 2])
-            for t in init_traces:
-                fig_path.add_trace(t)
-
-            magnet_trace_indices = list(range(3, 3 + len(init_traces)))
-
-            # Frames
-            frames_3d = []
-            for i in range(num_frames):
-                arm = (
-                    go.Scatter3d(
-                        x=[0, anim_path[i, 0]], y=[0, anim_path[i, 1]], z=[0, anim_path[i, 2]],
-                        mode="lines", line=dict(color="orange", width=2), showlegend=False,
-                    )
-                    if motion_type == "Hinge (Door/Lid)"
-                    else go.Scatter3d(x=[None], y=[None], z=[None], mode="none", showlegend=False)
-                )
-                magnet_traces = make_magnet_traces(
-                    magnet_obj, anim_path[i, 0], anim_path[i, 1], anim_path[i, 2]
-                )
-                frames_3d.append(go.Frame(
-                    data=[arm] + magnet_traces,
-                    traces=[2] + magnet_trace_indices,
-                    name=str(i),
-                ))
-
-            fig_path.frames = frames_3d
-
-            pad = height
-
-            all_x = anim_path[:, 0]
-            all_y = anim_path[:, 1]
-            all_z = anim_path[:, 2]
-
-            # Find the largest span across all axes
-            x_mid = (all_x.max() + all_x.min()) / 2
-            y_mid = (all_y.max() + all_y.min()) / 2
-            z_mid = (all_z.max() + all_z.min()) / 2
-
-            max_span = max(
-                all_x.max() - all_x.min(),
-                all_y.max() - all_y.min(),
-                all_z.max() - all_z.min(),
-            ) / 2 + pad
-
-            x_range = [x_mid - max_span, x_mid + max_span]
-            y_range = [y_mid - max_span, y_mid + max_span]
-            z_range = [z_mid - max_span, z_mid + max_span]
-
-            fig_path.update_layout(
-                uirevision="constant",
-                scene=dict(
-                    aspectmode="manual",
-                    aspectratio=dict(x=1, y=1, z=1),
-                    xaxis=dict(title="X (mm)", range=x_range),
-                    yaxis=dict(title="Y (mm)", range=y_range),
-                    zaxis=dict(title="Z (mm)", range=z_range),
-                ),
-                scene_camera=dict(
-                    eye=dict(x=.5, y=.5, z=.5)  # decrease values to zoom in, increase to zoom out
-                ),
-                margin=dict(l=0, r=0, t=30, b=0),
-                height=500,
-                updatemenus=play_pause_buttons,
-                sliders=slider_layout,
-            )
-            st.plotly_chart(fig_path, use_container_width=True)
-
-        with col_2d:
-            st.caption(f"Field components vs {x_axis_label}")
-            fig_field = go.Figure()
-            for y_data, name, color in [
-                (bx, "Bx", "red"),
-                (by, "By", "green"),
-                (bz, "Bz", "blue"),
-                (b_mag, "|B|", "black"),
-            ]:
-                fig_field.add_trace(go.Scatter(
-                    x=x_axis_data, y=y_data, mode="lines", name=name,
-                    line=dict(color=color, dash="dash" if name == "|B|" else "solid"),
-                ))
-            fig_field.add_trace(go.Scatter(
-                x=[x_axis_data[0]], y=[b_mag[0]],
-                mode="markers", marker=dict(size=10, color="orange"),
-                name="Current", showlegend=False,
-            ))
-
-            field_frames = []
-            for i in range(num_frames):
-                field_frames.append(go.Frame(
-                    data=[
-                        go.Scatter(x=x_axis_data, y=bx, mode="lines", line=dict(color="red")),
-                        go.Scatter(x=x_axis_data, y=by, mode="lines", line=dict(color="green")),
-                        go.Scatter(x=x_axis_data, y=bz, mode="lines", line=dict(color="blue")),
-                        go.Scatter(x=x_axis_data, y=b_mag, mode="lines", line=dict(color="black", dash="dash")),
-                        go.Scatter(
-                            x=[x_axis_data[i]], y=[b_mag[i]],
-                            mode="markers", marker=dict(size=12, color="orange"),
-                            showlegend=False,
+    play_pause_buttons = [
+        dict(
+            type="buttons",
+            showactive=False,
+            y=0,
+            x=0.5,
+            xanchor="center",
+            buttons=[
+                dict(
+                    label="▶ Play",
+                    method="animate",
+                    args=[
+                        None,
+                        dict(
+                            frame=dict(duration=50, redraw=True),
+                            fromcurrent=True,
+                            transition=dict(duration=0),
                         ),
                     ],
-                    name=str(i),
-                ))
+                ),
+                dict(
+                    label="⏸ Pause",
+                    method="animate",
+                    args=[
+                        [None],
+                        dict(
+                            frame=dict(duration=0, redraw=True),
+                            mode="immediate",
+                            transition=dict(duration=0),
+                        ),
+                    ],
+                ),
+            ],
+        )
+    ]
 
-            fig_field.frames = field_frames
-            fig_field.update_layout(
-                xaxis_title=x_axis_label,
-                yaxis_title="Field (Gauss)",
-                height=500,
-                margin=dict(l=20, r=20, t=30, b=80),
-                updatemenus=play_pause_buttons,
-                sliders=slider_layout,
+    slider_layout = [
+        dict(
+            active=0,
+            steps=slider_steps,
+            currentvalue=dict(prefix=slider_prefix, visible=True),
+            pad=dict(t=50),
+        )
+    ]
+
+    df_anim = pd.DataFrame({
+        "Frame": frame_idx,
+        "Magnet_X": anim_path[:, 0],
+        "Magnet_Y": anim_path[:, 1],
+        "Magnet_Z": anim_path[:, 2],
+        "Bx_Gauss": bx,
+        "By_Gauss": by,
+        "Bz_Gauss": bz,
+        "B_Total_Gauss": b_mag,
+    })
+    if motion_type == "Hinge (Door/Lid)":
+        df_anim.insert(1, "Angle_deg", angles_deg)
+
+    col_3d, col_2d = st.columns(2)
+
+    with col_3d:
+        st.caption("3D magnet path and sensor position")
+        fig_path = go.Figure()
+
+        # Magnet path (trace 0)
+        fig_path.add_trace(go.Scatter3d(
+            x=anim_path[:, 0], y=anim_path[:, 1], z=anim_path[:, 2],
+            mode="lines", line=dict(color="royalblue", width=3), name="Magnet Path",
+        ))
+
+        # Sensor (trace 1)
+        fig_path.add_trace(go.Scatter3d(
+            x=[0], y=[0], z=[0],
+            mode="markers", marker=dict(size=6, color="green", symbol="diamond"),
+            name="Sensor",
+        ))
+
+        # Hinge arm (trace 2)
+        if motion_type == "Hinge (Door/Lid)":
+            fig_path.add_trace(go.Scatter3d(
+                x=[0, anim_path[0, 0]], y=[0, anim_path[0, 1]], z=[0, anim_path[0, 2]],
+                mode="lines", line=dict(color="orange", width=2), showlegend=False,
+            ))
+        else:
+            fig_path.add_trace(go.Scatter3d(
+                x=[None], y=[None], z=[None], mode="none", showlegend=False,
+            ))
+
+        init_traces = make_magnet_traces(magnet_obj, anim_path[0, 0], anim_path[0, 1], anim_path[0, 2])
+        for t in init_traces:
+            fig_path.add_trace(t)
+
+        magnet_trace_indices = list(range(3, 3 + len(init_traces)))
+
+        # Frames
+        frames_3d = []
+        for i in range(num_frames):
+            arm = (
+                go.Scatter3d(
+                    x=[0, anim_path[i, 0]], y=[0, anim_path[i, 1]], z=[0, anim_path[i, 2]],
+                    mode="lines", line=dict(color="orange", width=2), showlegend=False,
+                )
+                if motion_type == "Hinge (Door/Lid)"
+                else go.Scatter3d(x=[None], y=[None], z=[None], mode="none", showlegend=False)
             )
-            st.plotly_chart(fig_field, use_container_width=True)
+            magnet_traces = make_magnet_traces(
+                magnet_obj, anim_path[i, 0], anim_path[i, 1], anim_path[i, 2]
+            )
+            frames_3d.append(go.Frame(
+                data=[arm] + magnet_traces,
+                traces=[2] + magnet_trace_indices,
+                name=str(i),
+            ))
 
-        st.subheader("Animation Summary")
-        s1, s2, s3, s4 = st.columns(4)
-        s1.metric("Max |B|", f"{b_mag.max():.1f} G")
-        s2.metric("Min |B|", f"{b_mag.min():.1f} G")
-        s3.metric("Max Bz", f"{np.max(np.abs(bz)):.1f} G")
-        path_len = np.sum(np.sqrt(np.sum(np.diff(anim_path, axis=0) ** 2, axis=1)))
-        s4.metric("Path Length", f"{path_len:.1f} mm")
+        fig_path.frames = frames_3d
 
-        with st.expander("View all animation data"):
-            st.dataframe(df_anim, use_container_width=True)
+        pad = height
+
+        all_x = anim_path[:, 0]
+        all_y = anim_path[:, 1]
+        all_z = anim_path[:, 2]
+
+        # Find the largest span across all axes
+        x_mid = (all_x.max() + all_x.min()) / 2
+        y_mid = (all_y.max() + all_y.min()) / 2
+        z_mid = (all_z.max() + all_z.min()) / 2
+
+        max_span = max(
+            all_x.max() - all_x.min(),
+            all_y.max() - all_y.min(),
+            all_z.max() - all_z.min(),
+        ) / 2 + pad
+
+        x_range = [x_mid - max_span, x_mid + max_span]
+        y_range = [y_mid - max_span, y_mid + max_span]
+        z_range = [z_mid - max_span, z_mid + max_span]
+
+        fig_path.update_layout(
+            uirevision="constant",
+            scene=dict(
+                aspectmode="manual",
+                aspectratio=dict(x=1, y=1, z=1),
+                xaxis=dict(title="X (mm)", range=x_range),
+                yaxis=dict(title="Y (mm)", range=y_range),
+                zaxis=dict(title="Z (mm)", range=z_range),
+            ),
+            scene_camera=dict(
+                eye=dict(x=.5, y=.5, z=.5)
+            ),
+            margin=dict(l=0, r=0, t=30, b=0),
+            height=500,
+            updatemenus=play_pause_buttons,
+            sliders=slider_layout,
+        )
+        st.plotly_chart(fig_path, use_container_width=True)
+
+    with col_2d:
+        st.caption(f"Field components vs {x_axis_label}")
+        fig_field = go.Figure()
+        for y_data, name, color in [
+            (bx, "Bx", "red"),
+            (by, "By", "green"),
+            (bz, "Bz", "blue"),
+            (b_mag, "|B|", "black"),
+        ]:
+            fig_field.add_trace(go.Scatter(
+                x=x_axis_data, y=y_data, mode="lines", name=name,
+                line=dict(color=color, dash="dash" if name == "|B|" else "solid"),
+            ))
+        fig_field.add_trace(go.Scatter(
+            x=[x_axis_data[0]], y=[b_mag[0]],
+            mode="markers", marker=dict(size=10, color="orange"),
+            name="Current", showlegend=False,
+        ))
+
+        field_frames = []
+        for i in range(num_frames):
+            field_frames.append(go.Frame(
+                data=[
+                    go.Scatter(x=x_axis_data, y=bx, mode="lines", line=dict(color="red")),
+                    go.Scatter(x=x_axis_data, y=by, mode="lines", line=dict(color="green")),
+                    go.Scatter(x=x_axis_data, y=bz, mode="lines", line=dict(color="blue")),
+                    go.Scatter(x=x_axis_data, y=b_mag, mode="lines", line=dict(color="black", dash="dash")),
+                    go.Scatter(
+                        x=[x_axis_data[i]], y=[b_mag[i]],
+                        mode="markers", marker=dict(size=12, color="orange"),
+                        showlegend=False,
+                    ),
+                ],
+                name=str(i),
+            ))
+
+        fig_field.frames = field_frames
+        fig_field.update_layout(
+            xaxis_title=x_axis_label,
+            yaxis_title="Field (Gauss)",
+            height=500,
+            margin=dict(l=20, r=20, t=30, b=80),
+            updatemenus=play_pause_buttons,
+            sliders=slider_layout,
+        )
+        st.plotly_chart(fig_field, use_container_width=True)
+
+    st.subheader("Animation Summary")
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric("Max |B|", f"{b_mag.max():.1f} G")
+    s2.metric("Min |B|", f"{b_mag.min():.1f} G")
+    s3.metric("Max Bz", f"{np.max(np.abs(bz)):.1f} G")
+    path_len = np.sum(np.sqrt(np.sum(np.diff(anim_path, axis=0) ** 2, axis=1)))
+    s4.metric("Path Length", f"{path_len:.1f} mm")
+
+    with st.expander("View all animation data"):
+        st.dataframe(df_anim, use_container_width=True)
+
+    st.download_button(
+        "Export Animation Data (CSV)",
+        df_anim.to_csv(index=False).encode(),
+        "animation_data.csv",
+        "text/csv",
+    )
 #TODO: This is currently not needed, will develop at later point.
 # with tab_parts:
 #     st.subheader("Find Matching Parts")
