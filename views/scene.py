@@ -3,14 +3,15 @@ import magpylib as magpy
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from utils import make_magnet_mesh
+#from utils import make_magnet_mesh, rotation_matrix, rotate_point
 
 # --- Calculation Logic ---
-def create_magnet(shape_type, h, d_or_dim, rem_gauss):
+def create_magnet(shape_type, h, d_or_dim, rem_gauss, radial=False):
     polarization_mt = rem_gauss / 10.0
     if shape_type == "Cylinder":
+        polarization = (polarization_mt, 0, 0) if radial else (0, 0, polarization_mt)
         return magpy.magnet.Cylinder(
-            polarization=(0, 0, polarization_mt),
+            polarization=(polarization),
             dimension=(d_or_dim, h),
             position=(0, 0, 0),
             style_magnetization_color_mode="bicolor",
@@ -31,7 +32,7 @@ def create_magnet(shape_type, h, d_or_dim, rem_gauss):
     if shape_type == "Ring":
         return magpy.magnet.CylinderSegment(
             magnetization=(0, 0, 1e6),  # Magnetization in A/m (z-direction)
-            dimension=(5, 10, 3, 0, 360),  # (r_inner, r_outer, height, phi1, phi2) in meters/degrees
+            dimension=(1, 2, 1, 0, 360),  # (r_inner, r_outer, height, phi1, phi2) in meters/degrees
             position=(0, 0, 0),
             style_magnetization_color_mode="bicolor",
             style_magnetization_color_north="r",
@@ -50,14 +51,24 @@ def create_magnet(shape_type, h, d_or_dim, rem_gauss):
             style_magnetization_color_transition=0,
         )
 
-def make_magnet_traces(magnet, cx, cy, cz):
-    """Set magnet position and extract plotly traces."""
+def make_magnet_traces(magnet, cx, cy, cz, angle_x=0, angle_y=0, angle_z=0):
+    """Set magnet position and rotation, then extract plotly traces."""
     original_pos = magnet.position.copy()
+    # Store original orientation to restore later
+    from scipy.spatial.transform import Rotation as R
+    original_orientation = R.from_euler('xyz', [0, 0, 0], degrees=True)
+
     magnet.position = (cx, cy, cz)
+
+    # Reset orientation to identity first, then apply the desired rotation
+    magnet.orientation = original_orientation
+    if angle_x != 0 or angle_y != 0 or angle_z != 0:
+        magnet.rotate_from_euler([angle_x, angle_y, angle_z], 'xyz', degrees=True)
 
     fig = magnet.show(backend="plotly", return_fig=True)
 
     magnet.position = original_pos  # restore
+    magnet.orientation = original_orientation  # restore to identity
 
     traces = []
     for trace in fig.data:
@@ -91,6 +102,14 @@ def generate_curve(magnet, h):
 
 
 def generate_animation_path(motion, n_frames, **kwargs):
+    if motion == "Position-Based":
+        start_pos = np.array(kwargs["start_pos"])
+        end_pos = np.array(kwargs["end_pos"])
+        return np.array([
+            start_pos + t * (end_pos - start_pos)
+            for t in np.linspace(0, 1, n_frames)
+        ])
+    # Keep legacy motion types for backward compatibility
     if motion == "Linear X-Sweep":
         r = kwargs["sweep_range"]
         xs = np.linspace(-r, r, n_frames)
@@ -145,12 +164,48 @@ def generate_animation_path(motion, n_frames, **kwargs):
     return np.zeros((n_frames, 3))
 
 
-def compute_animation_fields(magnet, path_positions):
+def compute_animation_fields(magnet, path_positions, rot_x_arr=None, rot_y_arr=None, rot_z_arr=None):
+    """Compute magnetic field at sensor location (0,0,0) as magnet moves along path.
+
+    Args:
+        magnet: magpylib magnet object
+        path_positions: Nx3 array of magnet positions
+        rot_x_arr, rot_y_arr, rot_z_arr: N-element arrays of rotation angles in degrees (optional)
+
+    Returns:
+        Nx3 array of magnetic field vectors in Gauss
+    """
+    from scipy.spatial.transform import Rotation as R
+
+    n_frames = len(path_positions)
+
+    # Default to no rotation if not provided
+    if rot_x_arr is None:
+        rot_x_arr = np.zeros(n_frames)
+    if rot_y_arr is None:
+        rot_y_arr = np.zeros(n_frames)
+    if rot_z_arr is None:
+        rot_z_arr = np.zeros(n_frames)
+
     fields = []
-    for pos in path_positions:
+    original_pos = magnet.position.copy()
+    identity_orientation = R.from_euler('xyz', [0, 0, 0], degrees=True)
+
+    for i, pos in enumerate(path_positions):
         magnet.position = pos
+        # Reset orientation to identity before applying rotation
+        magnet.orientation = identity_orientation
+
+        # Apply rotation if specified
+        if rot_x_arr[i] != 0 or rot_y_arr[i] != 0 or rot_z_arr[i] != 0:
+            magnet.rotate_from_euler([rot_x_arr[i], rot_y_arr[i], rot_z_arr[i]], 'xyz', degrees=True)
+
         fields.append(magpy.getB(magnet, (0, 0, 0)) * 10.0)
-    magnet.position = (0, 0, 0)
+
+    # Restore original position and orientation to identity
+    magnet.position = original_pos
+    magnet.orientation = identity_orientation
+
     return np.array(fields)
 
 
@@ -195,6 +250,76 @@ REMANENCE_PRESETS = {
     "N55": 15000, "Custom": 1000,
 }
 
+# Preset configurations for each simulation type
+PRESET_CONFIGS = {
+    "slide_by": {
+        "name": "Slide-By",
+        "shape": "Cylinder (Axially Magnetized)",
+        "magnet_type": "N42",
+        "height": 5.0,
+        "diameter": 5.0,
+        "z_air_gap": 2.0,
+        "motion_type": "Position-Based",
+        "start_x": -10.0,
+        "start_y": 0.0,
+        "start_z": 7.0,
+        "end_x": 10.0,
+        "end_y": 0.0,
+        "end_z": 7.0,
+        "rot_x_start": 0.0,
+        "rot_y_start": 0.0,
+        "rot_z_start": 0.0,
+        "rot_x_end": 0.0,
+        "rot_y_end": 0.0,
+        "rot_z_end": 0.0,
+        "num_frames": 60,
+    },
+    "angle_encoding": {
+        "name": "Angle Encoding",
+        "shape": "Cylinder (Axially Magnetized)",
+        "magnet_type": "N42",
+        "height": 5.0,
+        "diameter": 5.0,
+        "z_air_gap": 2.0,
+        "motion_type": "Position-Based",
+        "start_x": 0.0,
+        "start_y": 0.0,
+        "start_z": 5.0,
+        "end_x": 0.0,
+        "end_y": 0.0,
+        "end_z": 5.0,
+        "rot_x_start": 0.0,
+        "rot_y_start": 0.0,
+        "rot_z_start": 0.0,
+        "rot_x_end": 0.0,
+        "rot_y_end": 0.0,
+        "rot_z_end": 359.9,
+        "num_frames": 60,
+    },
+    "incremental_encoding": {
+        "name": "Incremental Encoding",
+        "shape": "Ring (Hollow Cylinder, Radial)",
+        "magnet_type": "N42",
+        "height": 3.0,
+        "diameter": 1.0,
+        "z_air_gap": 2.0,
+        "motion_type": "Position-Based",
+        "start_x": 0.0,
+        "start_y": 0.0,
+        "start_z": 5.0,
+        "end_x": 0.0,
+        "end_y": 0.0,
+        "end_z": 5.0,
+        "rot_x_start": 0.0,
+        "rot_y_start": 0.0,
+        "rot_z_start": 0.0,
+        "rot_x_end": 0.0,
+        "rot_y_end": 0.0,
+        "rot_z_end": 359.9,
+        "num_frames": 60,
+    },
+}
+
 SHAPE_OPTIONS = [
     "Cylinder (Axially Magnetized)",
     "Cylinder (Radially Magnetized)",
@@ -216,8 +341,8 @@ SHAPE_TYPE_MAP = {
 st.set_page_config(layout="wide", page_title="3D Magnetic Field Calculator")
 
 # --- Session State ---
-# if "selected_sim" not in st.session_state:
-#     st.session_state.selected_sim = None
+if "selected_preset" not in st.session_state:
+    st.session_state.selected_preset = None
 
 # --- CSS ---
 st.markdown("""
@@ -276,11 +401,8 @@ card_cols = st.columns(len(SIMULATIONS))
 
 for col, sim in zip(card_cols, SIMULATIONS):
     with col:
-        #is_selected = st.session_state.selected_sim == sim["key"]
-        border_class = ""
-
         st.markdown(f"""
-            <div class="card {border_class}">
+            <div class="card">
                 <div class="card-image">
                     <img src="app/static/{sim['image']}" />
                 </div>
@@ -294,48 +416,117 @@ for col, sim in zip(card_cols, SIMULATIONS):
             </div>
         """, unsafe_allow_html=True)
 
-        btn_label = "Select"
-        #if st.button(btn_label, key=f"btn_{sim['key']}", type="primary" if is_selected else "secondary"):
-            #st.session_state.selected_sim = sim["key"]
-            #st.rerun()
+        if st.button("Start", key=f"btn_{sim['key']}", type="primary"):
+            st.session_state.selected_preset = sim['key']
+            st.rerun()
 
 st.divider()
 
 # --- Sidebar ---
 with st.sidebar:
+    # Load preset if one is selected
+    preset_config = None
+    if st.session_state.selected_preset:
+        preset_config = PRESET_CONFIGS.get(st.session_state.selected_preset)
+        if preset_config:
+            st.info(f"📋 Preset: {preset_config['name']}")
+            if st.button("Clear Preset"):
+                st.session_state.selected_preset = None
+                st.rerun()
+
     st.header("Magnet Settings")
 
-    shape = st.selectbox("Magnet Shape", SHAPE_OPTIONS)
+    shape = st.selectbox(
+        "Magnet Shape",
+        SHAPE_OPTIONS,
+        index=SHAPE_OPTIONS.index(preset_config["shape"]) if preset_config else 0
+    )
     shape_type = SHAPE_TYPE_MAP[shape]
 
-    magnet_type = st.selectbox("Magnet Type", list(REMANENCE_PRESETS.keys()))
+    magnet_type = st.selectbox(
+        "Magnet Type",
+        list(REMANENCE_PRESETS.keys()),
+        index=list(REMANENCE_PRESETS.keys()).index(preset_config["magnet_type"]) if preset_config else 0
+    )
     default_rem = REMANENCE_PRESETS[magnet_type]
     remanence_g = st.number_input(
         "Remanence (Gauss)",
-        value=float(default_rem),
+        value=float(REMANENCE_PRESETS.get(preset_config["magnet_type"], default_rem)) if preset_config else default_rem,
         disabled=magnet_type != "Custom",
     )
 
-    height = st.number_input("Height (mm)", value=5.0, min_value=0.1, step=0.5)
+    height = st.number_input(
+        "Height (mm)",
+        value=preset_config["height"] if preset_config else 5.0,
+        min_value=0.1,
+        step=0.5
+    )
 
     if shape_type == "Cylinder":
-        diameter = st.number_input("Diameter (mm)", value=5.0, min_value=0.1, step=0.5)
+        diameter = st.number_input(
+            "Diameter (mm)",
+            value=preset_config["diameter"] if preset_config else 5.0,
+            min_value=0.1,
+            step=0.5
+        )
         dims = diameter
     else:
         width = st.number_input("Width (mm)", value=10.0)
         length = st.number_input("Length (mm)", value=10.0)
         dims = (width, length)
 
-    z_air_gap = st.number_input("Z Air Gap (mm)", value=2.0, min_value=0.0, step=0.1)
+    z_air_gap = st.number_input(
+        "Z Air Gap (mm)",
+        value=preset_config["z_air_gap"] if preset_config else 2.0,
+        min_value=0.0,
+        step=0.1
+    )
 
     st.markdown("---")
     st.header("Animation Settings")
 
+    st.subheader("Magnet Rotation (Start → End)")
+    col_rot1, col_rot2 = st.columns(2)
+    with col_rot1:
+        st.write("**Starting Rotation**")
+        rot_x_start = st.number_input("Start Rotate X (°)", value=preset_config["rot_x_start"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+        rot_y_start = st.number_input("Start Rotate Y (°)", value=preset_config["rot_y_start"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+        rot_z_start = st.number_input("Start Rotate Z (°)", value=preset_config["rot_z_start"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+    with col_rot2:
+        st.write("**Ending Rotation**")
+        rot_x_end = st.number_input("End Rotate X (°)", value=preset_config["rot_x_end"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+        rot_y_end = st.number_input("End Rotate Y (°)", value=preset_config["rot_y_end"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+        rot_z_end = st.number_input("End Rotate Z (°)", value=preset_config["rot_z_end"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+
+    st.markdown("---")
+    st.subheader("Magnet Position")
+    col_pos1, col_pos2 = st.columns(2)
+    with col_pos1:
+        st.write("**Starting Position**")
+        start_x = st.number_input("Start X (mm)", value=preset_config["start_x"] if preset_config else 0.0, step=0.5)
+        start_y = st.number_input("Start Y (mm)", value=preset_config["start_y"] if preset_config else 0.0, step=0.5)
+        start_z = st.number_input("Start Z (mm)", value=preset_config["start_z"] if preset_config else 5.0, step=0.5)
+    with col_pos2:
+        st.write("**Ending Position**")
+        end_x = st.number_input("End X (mm)", value=preset_config["end_x"] if preset_config else 15.0, step=0.5)
+        end_y = st.number_input("End Y (mm)", value=preset_config["end_y"] if preset_config else 0.0, step=0.5)
+        end_z = st.number_input("End Z (mm)", value=preset_config["end_z"] if preset_config else 5.0, step=0.5)
+
+    st.markdown("---")
+    st.subheader("Motion Path")
+
     motion_type = st.selectbox(
         "Motion Path",
-        ["Linear X-Sweep", "Linear Y-Sweep", "Linear Z-Sweep", "Circular XY", "Hinge (Door/Lid)", "Custom Path"],
+        ["Position-Based", "Linear X-Sweep", "Linear Y-Sweep", "Linear Z-Sweep", "Circular XY", "Hinge (Door/Lid)", "Custom Path"],
+        index=["Position-Based", "Linear X-Sweep", "Linear Y-Sweep", "Linear Z-Sweep", "Circular XY", "Hinge (Door/Lid)", "Custom Path"].index(preset_config["motion_type"]) if preset_config else 0
     )
-    num_frames = st.slider("Number of Frames", min_value=10, max_value=200, value=60, step=10)
+    num_frames = st.slider(
+        "Number of Frames",
+        min_value=10,
+        max_value=200,
+        value=preset_config["num_frames"] if preset_config else 60,
+        step=10
+    )
 
     # Motion-specific params
     sweep_range = orbit_radius = orbit_z_offset = None
@@ -370,39 +561,22 @@ with st.sidebar:
     df_static = pd.DataFrame({"AirGap_mm": curve_gaps, "Bz_Gauss": curve_b})
     st.download_button("Export CSV", df_static.to_csv(index=False).encode(), "magnet_data.csv", "text/csv")
 
-# --- Main Tabs ---
-#tab_static, tab_anim, tab_parts = st.tabs(["Static Analysis", "Animation", "Part Matching"])
-
-# with tab_static:
-#     col1, col2 = st.columns(2)
-#     with col1:
-#         st.subheader("Device")
-#         st.caption("Left click to rotate. Scroll to zoom.")
-#         fig_3d = magpy.show(magnet_obj, sensor_obj, backend="plotly", return_fig=True)
-#         fig_3d.update_layout(scene=dict(aspectmode="data"), margin=dict(l=0, r=0, t=0, b=0), height=400)
-#         st.plotly_chart(fig_3d, use_container_width=True)
-
-#     with col2:
-#         st.subheader("Field Strength vs Gap")
-#         fig_2d = go.Figure()
-#         fig_2d.add_trace(go.Scatter(x=curve_gaps, y=curve_b, mode="lines", name="Bz vs Gap"))
-#         fig_2d.add_trace(go.Scatter(
-#             x=[z_air_gap], y=[result_gauss], mode="markers",
-#             name="Current Pos", marker=dict(size=10, color="red"),
-#         ))
-#         fig_2d.update_layout(
-#             xaxis_title="Air Gap (mm)", yaxis_title="Magnetic Field (Gauss)",
-#             height=400, margin=dict(l=20, r=20, t=20, b=20),
-#         )
-#         st.plotly_chart(fig_2d, use_container_width=True)
-
 st.subheader("Animated Magnet Motion")
 
-anim_magnet = create_magnet(shape_type, height, dims, remanence_g)
+if shape_type == "Cylinder (Radially Magnetized)":
+    radial = True
+else:
+    radial = False
+anim_magnet = create_magnet(shape_type, height, dims, remanence_g, radial=radial)
 z_offset_default = (height / 2) + z_air_gap
 
 path_kwargs = {}
-if motion_type in ["Linear X-Sweep", "Linear Y-Sweep"]:
+if motion_type == "Position-Based":
+    path_kwargs = {
+        "start_pos": (start_x, start_y, start_z),
+        "end_pos": (end_x, end_y, end_z),
+    }
+elif motion_type in ["Linear X-Sweep", "Linear Y-Sweep"]:
     path_kwargs = {"sweep_range": sweep_range or 15.0, "z_offset": z_offset_default}
 elif motion_type == "Linear Z-Sweep":
     path_kwargs = {"sweep_range": sweep_range or 15.0}
@@ -422,7 +596,11 @@ elif motion_type == "Custom Path":
 
 try:
     anim_path = generate_animation_path(motion_type, num_frames, **path_kwargs)
-    anim_fields = compute_animation_fields(anim_magnet, anim_path)
+    # Interpolate rotation angles for field computation
+    rot_x_interp = np.linspace(rot_x_start, rot_x_end, num_frames)
+    rot_y_interp = np.linspace(rot_y_start, rot_y_end, num_frames)
+    rot_z_interp = np.linspace(rot_z_start, rot_z_end, num_frames)
+    anim_fields = compute_animation_fields(anim_magnet, anim_path, rot_x_interp, rot_y_interp, rot_z_interp)
 except Exception as e:
     st.error(f"Animation error: {e}")
     anim_path = None
@@ -449,6 +627,13 @@ else:
             angles_deg = np.linspace(hinge_angle_close, hinge_angle_open, num_frames)
         x_axis_data, x_axis_label = angles_deg, "Hinge Angle (°)"
         slider_prefix = "Angle: "
+    elif motion_type == "Position-Based":
+        # For position-based, show distance along the path
+        path_distances = np.zeros(num_frames)
+        for i in range(1, num_frames):
+            path_distances[i] = path_distances[i-1] + np.linalg.norm(anim_path[i] - anim_path[i-1])
+        x_axis_data, x_axis_label = path_distances, "Distance (mm)"
+        slider_prefix = "Position: "
     else:
         x_axis_data, x_axis_label = frame_idx, "Frame"
         slider_prefix = "Frame: "
@@ -519,6 +704,9 @@ else:
         "Magnet_X": anim_path[:, 0],
         "Magnet_Y": anim_path[:, 1],
         "Magnet_Z": anim_path[:, 2],
+        "Rotate_X": rot_x_interp,
+        "Rotate_Y": rot_y_interp,
+        "Rotate_Z": rot_z_interp,
         "Bx_Gauss": bx,
         "By_Gauss": by,
         "Bz_Gauss": bz,
@@ -526,6 +714,8 @@ else:
     })
     if motion_type == "Hinge (Door/Lid)":
         df_anim.insert(1, "Angle_deg", angles_deg)
+    elif motion_type == "Position-Based":
+        df_anim.insert(1, "Distance_mm", x_axis_data)
 
     col_3d, col_2d = st.columns(2)
 
@@ -557,11 +747,16 @@ else:
                 x=[None], y=[None], z=[None], mode="none", showlegend=False,
             ))
 
-        init_traces = make_magnet_traces(magnet_obj, anim_path[0, 0], anim_path[0, 1], anim_path[0, 2])
+        init_traces = make_magnet_traces(magnet_obj, anim_path[0, 0], anim_path[0, 1], anim_path[0, 2], rot_x_start, rot_y_start, rot_z_start)
         for t in init_traces:
             fig_path.add_trace(t)
 
         magnet_trace_indices = list(range(3, 3 + len(init_traces)))
+
+        # Interpolate rotation angles for each frame
+        rot_x_interp = np.linspace(rot_x_start, rot_x_end, num_frames)
+        rot_y_interp = np.linspace(rot_y_start, rot_y_end, num_frames)
+        rot_z_interp = np.linspace(rot_z_start, rot_z_end, num_frames)
 
         # Frames
         frames_3d = []
@@ -575,7 +770,8 @@ else:
                 else go.Scatter3d(x=[None], y=[None], z=[None], mode="none", showlegend=False)
             )
             magnet_traces = make_magnet_traces(
-                magnet_obj, anim_path[i, 0], anim_path[i, 1], anim_path[i, 2]
+                magnet_obj, anim_path[i, 0], anim_path[i, 1], anim_path[i, 2],
+                rot_x_interp[i], rot_y_interp[i], rot_z_interp[i]
             )
             frames_3d.append(go.Frame(
                 data=[arm] + magnet_traces,
@@ -585,38 +781,44 @@ else:
 
         fig_path.frames = frames_3d
 
-        pad = height
-
         all_x = anim_path[:, 0]
         all_y = anim_path[:, 1]
         all_z = anim_path[:, 2]
 
         # Find the largest span across all axes
+        x_span = all_x.max() - all_x.min()
+        y_span = all_y.max() - all_y.min()
+        z_span = all_z.max() - all_z.min()
+
         x_mid = (all_x.max() + all_x.min()) / 2
         y_mid = (all_y.max() + all_y.min()) / 2
         z_mid = (all_z.max() + all_z.min()) / 2
 
-        max_span = max(
-            all_x.max() - all_x.min(),
-            all_y.max() - all_y.min(),
-            all_z.max() - all_z.min(),
-        ) / 2 + pad
+        # Padding should be at least magnet height + some margin, but also proportional to path size
+        magnet_size = max(height, 3)  # Minimum 3mm for small magnets
+        path_max_span = max(x_span, y_span, z_span)
+
+        # Use larger of magnet size or 20% of path span
+        padding = max(magnet_size * 1.5, path_max_span * 0.15)
+
+        # Total viewing half-range is max span/2 + padding
+        max_span = max(x_span, y_span, z_span) / 2 + padding
 
         x_range = [x_mid - max_span, x_mid + max_span]
         y_range = [y_mid - max_span, y_mid + max_span]
         z_range = [z_mid - max_span, z_mid + max_span]
 
         fig_path.update_layout(
-            uirevision="constant",
             scene=dict(
-                aspectmode="manual",
-                aspectratio=dict(x=1, y=1, z=1),
+                aspectmode="cube",  # Keep cube aspect to prevent distortion
                 xaxis=dict(title="X (mm)", range=x_range),
                 yaxis=dict(title="Y (mm)", range=y_range),
                 zaxis=dict(title="Z (mm)", range=z_range),
             ),
             scene_camera=dict(
-                eye=dict(x=.5, y=.5, z=.5)
+                eye=dict(x=1.2, y=1.2, z=0.9),
+                center=dict(x=0, y=0, z=0),
+                up=dict(x=0, y=0, z=1)
             ),
             margin=dict(l=0, r=0, t=30, b=0),
             height=500,

@@ -7,6 +7,58 @@ def go_to(page: str):
     st.rerun()
 
 
+def rotation_matrix(angle_x, angle_y, angle_z):
+    """Create a 3D rotation matrix from angles in degrees (ZYX convention).
+
+    Args:
+        angle_x: Rotation around X axis in degrees
+        angle_y: Rotation around Y axis in degrees
+        angle_z: Rotation around Z axis in degrees
+
+    Returns:
+        3x3 numpy rotation matrix
+    """
+    x, y, z = np.radians(angle_x), np.radians(angle_y), np.radians(angle_z)
+
+    # Rotation matrices for each axis
+    Rx = np.array([
+        [1, 0, 0],
+        [0, np.cos(x), -np.sin(x)],
+        [0, np.sin(x), np.cos(x)]
+    ])
+
+    Ry = np.array([
+        [np.cos(y), 0, np.sin(y)],
+        [0, 1, 0],
+        [-np.sin(y), 0, np.cos(y)]
+    ])
+
+    Rz = np.array([
+        [np.cos(z), -np.sin(z), 0],
+        [np.sin(z), np.cos(z), 0],
+        [0, 0, 1]
+    ])
+
+    # Combined rotation (ZYX order)
+    return Rz @ Ry @ Rx
+
+
+def rotate_point(point, angle_x, angle_y, angle_z):
+    """Rotate a 3D point around origin using Euler angles.
+
+    Args:
+        point: 3D point as tuple or array
+        angle_x: Rotation around X axis in degrees
+        angle_y: Rotation around Y axis in degrees
+        angle_z: Rotation around Z axis in degrees
+
+    Returns:
+        Rotated point as numpy array
+    """
+    R = rotation_matrix(angle_x, angle_y, angle_z)
+    return R @ np.array(point)
+
+
 def make_magnet_mesh(cx, cy, cz, radius=3, half_height=5, n=30):
     """Returns (north_mesh, south_mesh) Mesh3d traces for a cylindrical magnet."""
     theta = np.linspace(0, 2 * np.pi, n)
