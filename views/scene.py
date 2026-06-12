@@ -6,12 +6,15 @@ import plotly.graph_objects as go
 #from utils import make_magnet_mesh, rotation_matrix, rotate_point
 
 # --- Calculation Logic ---
-def create_magnet(shape_type, h, d_or_dim, rem_gauss, radial=False):
+def create_magnet(shape, h, d_or_dim, rem_gauss):
     polarization_mt = rem_gauss / 10.0
+    shape_type = SHAPE_TYPE_MAP[shape]
+
     if shape_type == "Cylinder":
+        radial = shape == "Cylinder (Radially Magnetized)"
         polarization = (polarization_mt, 0, 0) if radial else (0, 0, polarization_mt)
         return magpy.magnet.Cylinder(
-            polarization=(polarization),
+            polarization=polarization,
             dimension=(d_or_dim, h),
             position=(0, 0, 0),
             style_magnetization_color_mode="bicolor",
@@ -19,7 +22,7 @@ def create_magnet(shape_type, h, d_or_dim, rem_gauss, radial=False):
             style_magnetization_color_south="b",
             style_magnetization_color_transition=0,
         )
-    if shape_type == "Sphere":
+    elif shape_type == "Sphere":
         return magpy.magnet.Sphere(
             polarization=(0, 0, polarization_mt),
             diameter=h,
@@ -29,16 +32,18 @@ def create_magnet(shape_type, h, d_or_dim, rem_gauss, radial=False):
             style_magnetization_color_south="b",
             style_magnetization_color_transition=0,
         )
-    if shape_type == "Ring":
+    elif shape_type == "Ring":
+        inner_r = (d_or_dim * 0.3) / 2
+        outer_r = d_or_dim / 2
         return magpy.magnet.CylinderSegment(
-            magnetization=(0, 0, 1e6),  # Magnetization in A/m (z-direction)
-            dimension=(1, 2, 1, 0, 360),  # (r_inner, r_outer, height, phi1, phi2) in meters/degrees
+            magnetization=(polarization_mt * 1e3, 0, 0),
+            dimension=(inner_r, outer_r, h, 0, 360),
             position=(0, 0, 0),
             style_magnetization_color_mode="bicolor",
             style_magnetization_color_north="r",
             style_magnetization_color_south="b",
             style_magnetization_color_transition=0,
-            )
+        )
     else:
         w, l = d_or_dim
         return magpy.magnet.Cuboid(
@@ -51,24 +56,20 @@ def create_magnet(shape_type, h, d_or_dim, rem_gauss, radial=False):
             style_magnetization_color_transition=0,
         )
 
-def make_magnet_traces(magnet, cx, cy, cz, angle_x=0, angle_y=0, angle_z=0):
-    """Set magnet position and rotation, then extract plotly traces."""
-    original_pos = magnet.position.copy()
-    # Store original orientation to restore later
+def make_magnet_traces(shape, h, d_or_dim, rem_gauss, cx, cy, cz, angle_x=0, angle_y=0, angle_z=0):
+    """Create a fresh magnet, position/rotate it, extract plotly traces."""
     from scipy.spatial.transform import Rotation as R
-    original_orientation = R.from_euler('xyz', [0, 0, 0], degrees=True)
 
+    magnet = create_magnet(shape, h, d_or_dim, rem_gauss)
     magnet.position = (cx, cy, cz)
 
-    # Reset orientation to identity first, then apply the desired rotation
-    magnet.orientation = original_orientation
+    identity = R.from_euler('xyz', [0, 0, 0], degrees=True)
+    magnet.orientation = identity
+
     if angle_x != 0 or angle_y != 0 or angle_z != 0:
         magnet.rotate_from_euler([angle_x, angle_y, angle_z], 'xyz', degrees=True)
 
     fig = magnet.show(backend="plotly", return_fig=True)
-
-    magnet.position = original_pos  # restore
-    magnet.orientation = original_orientation  # restore to identity
 
     traces = []
     for trace in fig.data:
@@ -77,8 +78,8 @@ def make_magnet_traces(magnet, cx, cy, cz, angle_x=0, angle_y=0, angle_z=0):
 
     return traces
 
-def get_magnet_and_sensor(shape_type, h, d_or_dim, rem_gauss, gap):
-    magnet = create_magnet(shape_type, h, d_or_dim, rem_gauss)
+def get_magnet_and_sensor(shape, h, d_or_dim, rem_gauss, gap):
+    magnet = create_magnet(shape, h, d_or_dim, rem_gauss)
     sensor_pos_z = (h / 2) + gap
     sensor = magpy.Sensor(position=(0, 0, sensor_pos_z))
     return magnet, sensor
@@ -89,7 +90,8 @@ def calculate_field(magnet, sensor):
     return abs(b_vec[2] * 10.0)
 
 
-def generate_curve(magnet, h):
+def generate_curve(shape, h, d_or_dim, rem_gauss):
+    magnet = create_magnet(shape, h, d_or_dim, rem_gauss)
     gaps = np.linspace(0, 15, 50)
     zs = (h / 2) + gaps
     path = np.column_stack([np.zeros_like(zs), np.zeros_like(zs), zs])
@@ -109,7 +111,6 @@ def generate_animation_path(motion, n_frames, **kwargs):
             start_pos + t * (end_pos - start_pos)
             for t in np.linspace(0, 1, n_frames)
         ])
-    # Keep legacy motion types for backward compatibility
     if motion == "Linear X-Sweep":
         r = kwargs["sweep_range"]
         xs = np.linspace(-r, r, n_frames)
@@ -164,22 +165,12 @@ def generate_animation_path(motion, n_frames, **kwargs):
     return np.zeros((n_frames, 3))
 
 
-def compute_animation_fields(magnet, path_positions, rot_x_arr=None, rot_y_arr=None, rot_z_arr=None):
-    """Compute magnetic field at sensor location (0,0,0) as magnet moves along path.
-
-    Args:
-        magnet: magpylib magnet object
-        path_positions: Nx3 array of magnet positions
-        rot_x_arr, rot_y_arr, rot_z_arr: N-element arrays of rotation angles in degrees (optional)
-
-    Returns:
-        Nx3 array of magnetic field vectors in Gauss
-    """
+def compute_animation_fields(magnet, path_positions, rot_x_arr=None, rot_y_arr=None, rot_z_arr=None, sensor_pos=(0, 0, 0)):
+    """Compute magnetic field at sensor location as magnet moves along path."""
     from scipy.spatial.transform import Rotation as R
 
     n_frames = len(path_positions)
 
-    # Default to no rotation if not provided
     if rot_x_arr is None:
         rot_x_arr = np.zeros(n_frames)
     if rot_y_arr is None:
@@ -193,16 +184,15 @@ def compute_animation_fields(magnet, path_positions, rot_x_arr=None, rot_y_arr=N
 
     for i, pos in enumerate(path_positions):
         magnet.position = pos
-        # Reset orientation to identity before applying rotation
         magnet.orientation = identity_orientation
 
-        # Apply rotation if specified
         if rot_x_arr[i] != 0 or rot_y_arr[i] != 0 or rot_z_arr[i] != 0:
-            magnet.rotate_from_euler([rot_x_arr[i], rot_y_arr[i], rot_z_arr[i]], 'xyz', degrees=True)
+            magnet.rotate_from_euler(
+                [rot_x_arr[i], rot_y_arr[i], rot_z_arr[i]], 'xyz', degrees=True
+            )
 
-        fields.append(magpy.getB(magnet, (0, 0, 0)) * 10.0)
+        fields.append(magpy.getB(magnet, sensor_pos) * 10.0)
 
-    # Restore original position and orientation to identity
     magnet.position = original_pos
     magnet.orientation = identity_orientation
 
@@ -223,24 +213,38 @@ def parse_custom_waypoints(text):
 SIMULATIONS = [
     {
         "key": "slide_by",
-        "name": "Slide-By",
+        "name": "Linear, Slide-By",
         "function": "Linear",
         "magnet_shape": "Axial Cylinder",
-        "image": "assets/magnet.jpg",
+        "image": "assets/slide_by.png",
     },
     {
-        "key": "angle_encoding",
-        "name": "Angle Encoding",
+        "key": "rotation_radial",
+        "name": "Rotation or Spin",
         "function": "Rotation",
-        "magnet_shape": "Diametric Cylinder",
-        "image": "assets/magnet.jpg",
+        "magnet_shape": "Radial Cylinder",
+        "image": "assets/cylinder_spin.png",
     },
     {
-        "key": "incremental_encoding",
-        "name": "Incremental Encoding",
+        "key": "arc",
+        "name": "Arc (Hinge)",
+        "function": "Arc",
+        "magnet_shape": "Axial Cylinder",
+        "image": "assets/arc_hinge.png",
+    },
+    {
+        "key": "head_on",
+        "name": "Linear, Head-On",
+        "function": "Linear",
+        "magnet_shape": "Axial Cylinder",
+        "image": "assets/head_on.png",
+    },
+    {
+        "key": "rotation_ring",
+        "name": "Rotation or Spin (Ring)",
         "function": "Rotation",
         "magnet_shape": "Ring",
-        "image": "assets/magnet.jpg",
+        "image": "assets/rotation_spin.png",
     },
 ]
 
@@ -250,10 +254,10 @@ REMANENCE_PRESETS = {
     "N55": 15000, "Custom": 1000,
 }
 
-# Preset configurations for each simulation type
 PRESET_CONFIGS = {
+    # Magnet moves laterally past the sensor (X axis)
     "slide_by": {
-        "name": "Slide-By",
+        "name": "Linear, Slide-By",
         "shape": "Cylinder (Axially Magnetized)",
         "magnet_type": "N42",
         "height": 5.0,
@@ -274,9 +278,10 @@ PRESET_CONFIGS = {
         "rot_z_end": 0.0,
         "num_frames": 60,
     },
-    "angle_encoding": {
-        "name": "Angle Encoding",
-        "shape": "Cylinder (Axially Magnetized)",
+    # Radially magnetized cylinder spins above sensor
+    "rotation_radial": {
+        "name": "Rotation or Spin",
+        "shape": "Cylinder (Radially Magnetized)",
         "magnet_type": "N42",
         "height": 5.0,
         "diameter": 5.0,
@@ -284,10 +289,10 @@ PRESET_CONFIGS = {
         "motion_type": "Position-Based",
         "start_x": 0.0,
         "start_y": 0.0,
-        "start_z": 5.0,
+        "start_z": 7.0,
         "end_x": 0.0,
         "end_y": 0.0,
-        "end_z": 5.0,
+        "end_z": 7.0,
         "rot_x_start": 0.0,
         "rot_y_start": 0.0,
         "rot_z_start": 0.0,
@@ -296,12 +301,59 @@ PRESET_CONFIGS = {
         "rot_z_end": 359.9,
         "num_frames": 60,
     },
-    "incremental_encoding": {
-        "name": "Incremental Encoding",
+    # Axial cylinder swings in an arc (like a hinge/door)
+    "arc": {
+        "name": "Arc (Hinge)",
+        "shape": "Cylinder (Axially Magnetized)",
+        "magnet_type": "N42",
+        "height": 5.0,
+        "diameter": 5.0,
+        "z_air_gap": 2.0,
+        "motion_type": "Hinge (Door/Lid)",
+        "start_x": -10.0,
+        "start_y": 0.0,
+        "start_z": 7.0,
+        "end_x": 10.0,
+        "end_y": 0.0,
+        "end_z": 7.0,
+        "rot_x_start": 0.0,
+        "rot_y_start": 0.0,
+        "rot_z_start": 0.0,
+        "rot_x_end": 0.0,
+        "rot_y_end": 90.0,
+        "rot_z_end": 0.0,
+        "num_frames": 60,
+    },
+    # Magnet moves directly toward/away from sensor (Z axis)
+    "head_on": {
+        "name": "Linear, Head-On",
+        "shape": "Cylinder (Axially Magnetized)",
+        "magnet_type": "N42",
+        "height": 5.0,
+        "diameter": 5.0,
+        "z_air_gap": 2.0,
+        "motion_type": "Position-Based",
+        "start_x": 0.0,
+        "start_y": 0.0,
+        "start_z": 3.0,
+        "end_x": 0.0,
+        "end_y": 0.0,
+        "end_z": 15.0,
+        "rot_x_start": 0.0,
+        "rot_y_start": 0.0,
+        "rot_z_start": 0.0,
+        "rot_x_end": 0.0,
+        "rot_y_end": 0.0,
+        "rot_z_end": 0.0,
+        "num_frames": 60,
+    },
+    # Ring magnet spins above sensor
+    "rotation_ring": {
+        "name": "Rotation or Spin (Ring)",
         "shape": "Ring (Hollow Cylinder, Radial)",
         "magnet_type": "N42",
-        "height": 3.0,
-        "diameter": 1.0,
+        "height": 1.0,
+        "diameter": 2.0,
         "z_air_gap": 2.0,
         "motion_type": "Position-Based",
         "start_x": 0.0,
@@ -319,7 +371,6 @@ PRESET_CONFIGS = {
         "num_frames": 60,
     },
 }
-
 SHAPE_OPTIONS = [
     "Cylinder (Axially Magnetized)",
     "Cylinder (Radially Magnetized)",
@@ -334,7 +385,7 @@ SHAPE_TYPE_MAP = {
     "Cylinder (Radially Magnetized)": "Cylinder",
     "Cuboid (Rectangular)": "Cuboid",
     "Ring (Hollow Cylinder, Radial)": "Ring",
-    "Sphere (Spherical)": "Sphere"
+    "Sphere (Spherical)": "Sphere",
 }
 
 # --- Page Config ---
@@ -457,22 +508,30 @@ with st.sidebar:
 
     height = st.number_input(
         "Height (mm)",
-        value=preset_config["height"] if preset_config else 5.0,
+        value=preset_config["height"] if preset_config else 2.0,
         min_value=0.1,
         step=0.5
     )
 
-    if shape_type == "Cylinder":
+    if shape_type in ("Cylinder", "Ring"):
         diameter = st.number_input(
             "Diameter (mm)",
-            value=preset_config["diameter"] if preset_config else 5.0,
+            value=preset_config["diameter"] if preset_config else 2.0,
+            min_value=0.1,
+            step=0.5
+        )
+        dims = diameter
+    elif shape_type == "Sphere":
+        diameter = st.number_input(
+            "Diameter (mm)",
+            value=preset_config["diameter"] if preset_config else 2.0,
             min_value=0.1,
             step=0.5
         )
         dims = diameter
     else:
-        width = st.number_input("Width (mm)", value=10.0)
-        length = st.number_input("Length (mm)", value=10.0)
+        width = st.number_input("Width (mm)", value=2.0)
+        length = st.number_input("Length (mm)", value=2.0)
         dims = (width, length)
 
     z_air_gap = st.number_input(
@@ -489,14 +548,14 @@ with st.sidebar:
     col_rot1, col_rot2 = st.columns(2)
     with col_rot1:
         st.write("**Starting Rotation**")
-        rot_x_start = st.number_input("Start Rotate X (°)", value=preset_config["rot_x_start"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
-        rot_y_start = st.number_input("Start Rotate Y (°)", value=preset_config["rot_y_start"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
-        rot_z_start = st.number_input("Start Rotate Z (°)", value=preset_config["rot_z_start"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+        rot_x_start = st.number_input("Start Rotate X (°)", value=preset_config["rot_x_start"] if preset_config else 0.0, min_value=-360.0, max_value=360.0, step=5.0)
+        rot_y_start = st.number_input("Start Rotate Y (°)", value=preset_config["rot_y_start"] if preset_config else 0.0, min_value=-360.0, max_value=360.0, step=5.0)
+        rot_z_start = st.number_input("Start Rotate Z (°)", value=preset_config["rot_z_start"] if preset_config else 0.0, min_value=-360.0, max_value=360.0, step=5.0)
     with col_rot2:
         st.write("**Ending Rotation**")
-        rot_x_end = st.number_input("End Rotate X (°)", value=preset_config["rot_x_end"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
-        rot_y_end = st.number_input("End Rotate Y (°)", value=preset_config["rot_y_end"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
-        rot_z_end = st.number_input("End Rotate Z (°)", value=preset_config["rot_z_end"] if preset_config else 0.0, min_value=0.0, max_value=360.0, step=5.0)
+        rot_x_end = st.number_input("End Rotate X (°)", value=preset_config["rot_x_end"] if preset_config else 0.0, min_value=-360.0, max_value=360.0, step=5.0)
+        rot_y_end = st.number_input("End Rotate Y (°)", value=preset_config["rot_y_end"] if preset_config else 0.0, min_value=-360.0, max_value=360.0, step=5.0)
+        rot_z_end = st.number_input("End Rotate Z (°)", value=preset_config["rot_z_end"] if preset_config else 0.0, min_value=-360.0, max_value=360.0, step=5.0)
 
     st.markdown("---")
     st.subheader("Magnet Position")
@@ -550,9 +609,9 @@ with st.sidebar:
         custom_waypoints_str = st.text_area("Waypoints", value="0,0,5\n10,0,5\n10,10,5\n0,10,5\n0,0,5")
 
 # --- Static Calculations ---
-magnet_obj, sensor_obj = get_magnet_and_sensor(shape_type, height, dims, remanence_g, z_air_gap)
+magnet_obj, sensor_obj = get_magnet_and_sensor(shape, height, dims, remanence_g, z_air_gap)
 result_gauss = calculate_field(magnet_obj, sensor_obj)
-curve_gaps, curve_b = generate_curve(magnet_obj, height)
+curve_gaps, curve_b = generate_curve(shape, height, dims, remanence_g)
 
 with st.sidebar:
     st.markdown("---")
@@ -567,7 +626,7 @@ if shape_type == "Cylinder (Radially Magnetized)":
     radial = True
 else:
     radial = False
-anim_magnet = create_magnet(shape_type, height, dims, remanence_g, radial=radial)
+anim_magnet = create_magnet(shape, height, dims, remanence_g)
 z_offset_default = (height / 2) + z_air_gap
 
 path_kwargs = {}
@@ -594,13 +653,18 @@ elif motion_type == "Hinge (Door/Lid)":
 elif motion_type == "Custom Path":
     path_kwargs = {"waypoints": parse_custom_waypoints(custom_waypoints_str or "0,0,5")}
 
+sensor_world_pos = (0, 0, 0)
+
 try:
     anim_path = generate_animation_path(motion_type, num_frames, **path_kwargs)
-    # Interpolate rotation angles for field computation
     rot_x_interp = np.linspace(rot_x_start, rot_x_end, num_frames)
     rot_y_interp = np.linspace(rot_y_start, rot_y_end, num_frames)
     rot_z_interp = np.linspace(rot_z_start, rot_z_end, num_frames)
-    anim_fields = compute_animation_fields(anim_magnet, anim_path, rot_x_interp, rot_y_interp, rot_z_interp)
+    anim_fields = compute_animation_fields(
+        anim_magnet, anim_path,
+        rot_x_interp, rot_y_interp, rot_z_interp,
+        sensor_pos=sensor_world_pos,
+    )
 except Exception as e:
     st.error(f"Animation error: {e}")
     anim_path = None
@@ -628,15 +692,26 @@ else:
         x_axis_data, x_axis_label = angles_deg, "Hinge Angle (°)"
         slider_prefix = "Angle: "
     elif motion_type == "Position-Based":
-        # For position-based, show distance along the path
         path_distances = np.zeros(num_frames)
         for i in range(1, num_frames):
-            path_distances[i] = path_distances[i-1] + np.linalg.norm(anim_path[i] - anim_path[i-1])
-        x_axis_data, x_axis_label = path_distances, "Distance (mm)"
-        slider_prefix = "Position: "
-    else:
-        x_axis_data, x_axis_label = frame_idx, "Frame"
-        slider_prefix = "Frame: "
+            path_distances[i] = path_distances[i - 1] + np.linalg.norm(
+                anim_path[i] - anim_path[i - 1]
+            )
+
+        # If magnet doesn't move, use total rotation angle as x-axis instead
+        total_rot = np.sqrt(
+            (rot_x_end - rot_x_start) ** 2
+            + (rot_y_end - rot_y_start) ** 2
+            + (rot_z_end - rot_z_start) ** 2
+        )
+        if path_distances[-1] < 0.01 and total_rot > 0.01:
+            # Pure rotation — use Z rotation angle (or whichever axis is sweeping)
+            rot_sweep = np.linspace(0, total_rot, num_frames)
+            x_axis_data, x_axis_label = rot_sweep, "Rotation Angle (°)"
+            slider_prefix = "Angle: "
+        else:
+            x_axis_data, x_axis_label = path_distances, "Distance (mm)"
+            slider_prefix = "Position: "
 
     slider_steps = [
         dict(
@@ -731,8 +806,8 @@ else:
 
         # Sensor (trace 1)
         fig_path.add_trace(go.Scatter3d(
-            x=[0], y=[0], z=[0],
-            mode="markers", marker=dict(size=6, color="green", symbol="diamond"),
+            x=[sensor_world_pos[0]], y=[sensor_world_pos[1]], z=[sensor_world_pos[2]],
+            mode="markers", marker=dict(size=8, color="green", symbol="diamond"),
             name="Sensor",
         ))
 
@@ -747,7 +822,11 @@ else:
                 x=[None], y=[None], z=[None], mode="none", showlegend=False,
             ))
 
-        init_traces = make_magnet_traces(magnet_obj, anim_path[0, 0], anim_path[0, 1], anim_path[0, 2], rot_x_start, rot_y_start, rot_z_start)
+        init_traces = make_magnet_traces(
+            shape, height, dims, remanence_g,
+            anim_path[0, 0], anim_path[0, 1], anim_path[0, 2],
+            rot_x_start, rot_y_start, rot_z_start
+        )
         for t in init_traces:
             fig_path.add_trace(t)
 
@@ -770,7 +849,8 @@ else:
                 else go.Scatter3d(x=[None], y=[None], z=[None], mode="none", showlegend=False)
             )
             magnet_traces = make_magnet_traces(
-                magnet_obj, anim_path[i, 0], anim_path[i, 1], anim_path[i, 2],
+                shape, height, dims, remanence_g,
+                anim_path[i, 0], anim_path[i, 1], anim_path[i, 2],
                 rot_x_interp[i], rot_y_interp[i], rot_z_interp[i]
             )
             frames_3d.append(go.Frame(
@@ -781,32 +861,31 @@ else:
 
         fig_path.frames = frames_3d
 
-        all_x = anim_path[:, 0]
-        all_y = anim_path[:, 1]
-        all_z = anim_path[:, 2]
-
-        # Find the largest span across all axes
-        x_span = all_x.max() - all_x.min()
-        y_span = all_y.max() - all_y.min()
-        z_span = all_z.max() - all_z.min()
+        all_points = np.vstack([
+            anim_path,
+            [[sensor_world_pos[0], sensor_world_pos[1], sensor_world_pos[2]]]
+        ])
+        all_x = all_points[:, 0]
+        all_y = all_points[:, 1]
+        all_z = all_points[:, 2]
 
         x_mid = (all_x.max() + all_x.min()) / 2
         y_mid = (all_y.max() + all_y.min()) / 2
         z_mid = (all_z.max() + all_z.min()) / 2
 
-        # Padding should be at least magnet height + some margin, but also proportional to path size
-        magnet_size = max(height, 3)  # Minimum 3mm for small magnets
-        path_max_span = max(x_span, y_span, z_span)
+        # Single padding value based on magnet dimensions only
+        magnet_dim = max(height, dims if isinstance(dims, (int, float)) else max(dims))
+        padding = magnet_dim * 1.5
 
-        # Use larger of magnet size or 20% of path span
-        padding = max(magnet_size * 1.5, path_max_span * 0.15)
+        # Half-range is the largest axis span / 2 + padding (equal on all axes for cube mode)
+        x_half = (all_x.max() - all_x.min()) / 2
+        y_half = (all_y.max() - all_y.min()) / 2
+        z_half = (all_z.max() - all_z.min()) / 2
+        half_range = max(x_half, y_half, z_half, magnet_dim) + padding
 
-        # Total viewing half-range is max span/2 + padding
-        max_span = max(x_span, y_span, z_span) / 2 + padding
-
-        x_range = [x_mid - max_span, x_mid + max_span]
-        y_range = [y_mid - max_span, y_mid + max_span]
-        z_range = [z_mid - max_span, z_mid + max_span]
+        x_range = [x_mid - half_range, x_mid + half_range]
+        y_range = [y_mid - half_range, y_mid + half_range]
+        z_range = [z_mid - half_range, z_mid + half_range]
 
         fig_path.update_layout(
             scene=dict(
@@ -882,38 +961,19 @@ else:
     path_len = np.sum(np.sqrt(np.sum(np.diff(anim_path, axis=0) ** 2, axis=1)))
     s4.metric("Path Length", f"{path_len:.1f} mm")
 
+    disclaimer = (
+    "Magnetic calculations are performed via Magpylib (BSD 2-Clause, "
+    "© 2019-2025). Calculation results are provided for reference only. "
+    "Please contact us if you have more advanced simulation requirement."
+    )
+
+    csv_content = df_anim.to_csv(index=False) + f"\n{disclaimer}"
     with st.expander("View all animation data"):
         st.dataframe(df_anim, use_container_width=True)
-
+    st.text(disclaimer)
     st.download_button(
         "Export Animation Data (CSV)",
-        df_anim.to_csv(index=False).encode(),
+        csv_content.encode(),
         "animation_data.csv",
         "text/csv",
     )
-#TODO: This is currently not needed, will develop at later point.
-# with tab_parts:
-#     st.subheader("Find Matching Parts")
-#     c1, c2, c3 = st.columns(3)
-#     with c1:
-#         dev_type = st.selectbox("Device Type", ["Omnipolar", "Unipolar", "Bipolar"])
-#     with c2:
-#         out_type = st.selectbox("Output Type", ["Open Drain", "Push-Pull"])
-#     with c3:
-#         volt_type = st.selectbox("Operating Voltage", ["1.6 to 5.5", "3.0 to 24"])
-
-#     parts_db = [
-#         {"Part Number": "AH1921", "Type": "Omnipolar", "Out": "Open Drain", "Bop(Min)": 30, "Bop(Max)": 90},
-#         {"Part Number": "AH180", "Type": "Omnipolar", "Out": "Push-Pull", "Bop(Min)": 40, "Bop(Max)": 110},
-#         {"Part Number": "AH337", "Type": "Unipolar", "Out": "Open Drain", "Bop(Min)": 90, "Bop(Max)": 140},
-#     ]
-#     df_parts = pd.DataFrame(parts_db)
-#     filtered_df = df_parts[(df_parts["Type"] == dev_type) & (df_parts["Out"] == out_type)]
-#     st.dataframe(filtered_df, use_container_width=True)
-
-#     if not filtered_df.empty:
-#         req = filtered_df.iloc[0]["Bop(Max)"]
-#         if result_gauss > req:
-#             st.success(f"Success! {result_gauss:.1f}G > {req}G trigger point.")
-#         else:
-#             st.error(f"Too Weak. {result_gauss:.1f}G < {req}G trigger point.")
