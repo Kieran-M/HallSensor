@@ -3,15 +3,17 @@ import magpylib as magpy
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+import json
 
 FRAMERATE = 60
 FRAME_DURATION = int(1000 / FRAMERATE)
 
 DISCLAIMER = (
-        "Magnetic calculations are performed via Magpylib (BSD 2-Clause, "
-        "© 2019-2025). Calculation results are provided for reference only. "
-        "Please contact us if you have more advanced simulation requirement."
-        )
+    "Magnetic calculations are performed via Magpylib (BSD 2-Clause, "
+    "© 2019-2025). Calculation results are provided for reference only. "
+    "Please contact us if you have more advanced simulation requirement."
+)
+
 
 # --- Calculation Logic ---
 def create_magnet(shape, h, d_or_dim, rem_gauss):
@@ -126,6 +128,8 @@ def generate_animation_path(motion, **kwargs):
         a_close = np.radians(kwargs["angle_close"])
         plane = kwargs["plane"]
         bounce = kwargs["bounce"]
+        hinge_origin = np.array(kwargs.get("hinge_origin", (0, 0, 0)))
+
         if bounce:
             half = FRAMERATE // 2
             angles = np.concatenate([
@@ -134,24 +138,27 @@ def generate_animation_path(motion, **kwargs):
             ])
         else:
             angles = np.linspace(a_close, a_open, FRAMERATE)
+
         if plane == "XZ (side hinge)":
-            return np.column_stack([
+            local_path = np.column_stack([
                 radius * np.sin(angles),
                 np.zeros(FRAMERATE),
                 radius * np.cos(angles),
             ])
         elif plane == "YZ (top hinge)":
-            return np.column_stack([
+            local_path = np.column_stack([
                 np.zeros(FRAMERATE),
                 radius * np.sin(angles),
                 radius * np.cos(angles),
             ])
         else:
-            return np.column_stack([
+            local_path = np.column_stack([
                 radius * np.cos(angles),
                 radius * np.sin(angles),
                 np.full(FRAMERATE, kwargs.get("sensor_offset", 2.0)),
             ])
+
+        return local_path + hinge_origin
     return np.zeros((FRAMERATE, 3))
 
 
@@ -248,9 +255,9 @@ PRESET_CONFIGS = {
         "z_air_gap": 2.0,
         "motion_type": "Position-Based",
         "start_x": -10.0, "start_y": 0.0, "start_z": 7.0,
-        "end_x": 10.0,   "end_y": 0.0,   "end_z": 7.0,
+        "end_x": 10.0, "end_y": 0.0, "end_z": 7.0,
         "rot_x_start": 0.0, "rot_y_start": 0.0, "rot_z_start": 0.0,
-        "rot_x_end": 0.0,   "rot_y_end": 0.0,   "rot_z_end": 0.0,
+        "rot_x_end": 0.0, "rot_y_end": 0.0, "rot_z_end": 0.0,
     },
     "rotation_radial": {
         "name": "Rotation or Spin",
@@ -261,9 +268,9 @@ PRESET_CONFIGS = {
         "z_air_gap": 2.0,
         "motion_type": "Position-Based",
         "start_x": 0.0, "start_y": 0.0, "start_z": 7.0,
-        "end_x": 0.0,   "end_y": 0.0,   "end_z": 7.0,
+        "end_x": 0.0, "end_y": 0.0, "end_z": 7.0,
         "rot_x_start": 0.0, "rot_y_start": 0.0, "rot_z_start": 0.0,
-        "rot_x_end": 0.0,   "rot_y_end": 0.0,   "rot_z_end": 359.9,
+        "rot_x_end": 0.0, "rot_y_end": 0.0, "rot_z_end": 359.9,
     },
     "arc": {
         "name": "Arc (Hinge)",
@@ -273,10 +280,15 @@ PRESET_CONFIGS = {
         "diameter": 5.0,
         "z_air_gap": 2.0,
         "motion_type": "Hinge (Door/Lid)",
-        "start_x": -10.0, "start_y": 0.0, "start_z": 7.0,
-        "end_x": 10.0,    "end_y": 0.0,   "end_z": 7.0,
+        "hinge_origin_x": 0.0, "hinge_origin_y": 0.0, "hinge_origin_z": 0.0,
+        "sensor_x": 0.0, "sensor_y": 0.0, "sensor_z": 0.0,
+        "hinge_radius": 7.0,
+        "hinge_angle_open": 90.0,
+        "hinge_angle_close": 0.0,
+        "hinge_plane": "XZ (side hinge)",
+        "hinge_bounce": True,
         "rot_x_start": 0.0, "rot_y_start": 0.0, "rot_z_start": 0.0,
-        "rot_x_end": 0.0,   "rot_y_end": 90.0,  "rot_z_end": 0.0,
+        "rot_x_end": 0.0, "rot_y_end": 90.0, "rot_z_end": 0.0,
     },
     "head_on": {
         "name": "Linear, Head-On",
@@ -287,9 +299,9 @@ PRESET_CONFIGS = {
         "z_air_gap": 2.0,
         "motion_type": "Position-Based",
         "start_x": 0.0, "start_y": 0.0, "start_z": 3.0,
-        "end_x": 0.0,   "end_y": 0.0,   "end_z": 15.0,
+        "end_x": 0.0, "end_y": 0.0, "end_z": 15.0,
         "rot_x_start": 0.0, "rot_y_start": 0.0, "rot_z_start": 0.0,
-        "rot_x_end": 0.0,   "rot_y_end": 0.0,   "rot_z_end": 0.0,
+        "rot_x_end": 0.0, "rot_y_end": 0.0, "rot_z_end": 0.0,
     },
     "rotation_ring": {
         "name": "Rotation or Spin (Ring)",
@@ -300,9 +312,9 @@ PRESET_CONFIGS = {
         "z_air_gap": 2.0,
         "motion_type": "Position-Based",
         "start_x": 0.0, "start_y": 0.0, "start_z": 5.0,
-        "end_x": 0.0,   "end_y": 0.0,   "end_z": 5.0,
+        "end_x": 0.0, "end_y": 0.0, "end_z": 5.0,
         "rot_x_start": 0.0, "rot_y_start": 0.0, "rot_z_start": 0.0,
-        "rot_x_end": 0.0,   "rot_y_end": 0.0,   "rot_z_end": 359.9,
+        "rot_x_end": 0.0, "rot_y_end": 0.0, "rot_z_end": 359.9,
     },
 }
 
@@ -402,6 +414,7 @@ for col, sim in zip(card_cols, SIMULATIONS):
 
         if st.button("Start", key=f"btn_{sim['key']}", type="primary"):
             st.session_state.selected_preset = sim["key"]
+            st.session_state.fig_params = None  # Force rebuild
             st.rerun()
 
 st.divider()
@@ -415,6 +428,7 @@ with st.sidebar:
             st.info(f"📋 Preset: {preset_config['name']}")
             if st.button("Clear Preset"):
                 st.session_state.selected_preset = None
+                st.session_state.fig_params = None
                 st.rerun()
 
     st.header("Magnet Settings")
@@ -422,7 +436,7 @@ with st.sidebar:
     shape = st.selectbox(
         "Magnet Shape",
         SHAPE_OPTIONS,
-        index=SHAPE_OPTIONS.index(preset_config["shape"]) if preset_config else 0,
+        index=SHAPE_OPTIONS.index(preset_config["shape"]) if preset_config and preset_config.get("shape") in SHAPE_OPTIONS else 0,
     )
     shape_type = SHAPE_TYPE_MAP[shape]
 
@@ -520,29 +534,29 @@ with st.sidebar:
         st.write("**Starting Position**")
         start_x = st.number_input(
             "Start X (mm)",
-            value=preset_config["start_x"] if preset_config else 0.0, step=0.5,
+            value=preset_config.get("start_x", 0.0) if preset_config else 0.0, step=0.5,
         )
         start_y = st.number_input(
             "Start Y (mm)",
-            value=preset_config["start_y"] if preset_config else 0.0, step=0.5,
+            value=preset_config.get("start_y", 0.0) if preset_config else 0.0, step=0.5,
         )
         start_z = st.number_input(
             "Start Z (mm)",
-            value=preset_config["start_z"] if preset_config else 5.0, step=0.5,
+            value=preset_config.get("start_z", 5.0) if preset_config else 5.0, step=0.5,
         )
     with col_pos2:
         st.write("**Ending Position**")
         end_x = st.number_input(
             "End X (mm)",
-            value=preset_config["end_x"] if preset_config else 15.0, step=0.5,
+            value=preset_config.get("end_x", 15.0) if preset_config else 15.0, step=0.5,
         )
         end_y = st.number_input(
             "End Y (mm)",
-            value=preset_config["end_y"] if preset_config else 0.0, step=0.5,
+            value=preset_config.get("end_y", 0.0) if preset_config else 0.0, step=0.5,
         )
         end_z = st.number_input(
             "End Z (mm)",
-            value=preset_config["end_z"] if preset_config else 5.0, step=0.5,
+            value=preset_config.get("end_z", 5.0) if preset_config else 5.0, step=0.5,
         )
 
     st.markdown("---")
@@ -553,7 +567,7 @@ with st.sidebar:
         MOTION_OPTIONS,
         index=(
             MOTION_OPTIONS.index(preset_config["motion_type"])
-            if preset_config and preset_config["motion_type"] in MOTION_OPTIONS
+            if preset_config and preset_config.get("motion_type") in MOTION_OPTIONS
             else 0
         ),
     )
@@ -561,21 +575,68 @@ with st.sidebar:
     # Hinge-specific params (only shown when relevant)
     hinge_radius = hinge_angle_open = hinge_angle_close = None
     hinge_plane = hinge_sensor_offset = hinge_bounce = None
+    hinge_origin_x = hinge_origin_y = hinge_origin_z = None
+    sensor_x = sensor_y = sensor_z = None
 
     if motion_type == "Hinge (Door/Lid)":
-        hinge_radius = st.number_input(
-            "Hinge Arm Length (mm)", value=15.0, min_value=1.0, step=1.0
+        st.markdown("---")
+        st.subheader("Hinge Origin Position")
+        hinge_origin_x = st.number_input(
+            "Hinge Origin X (mm)",
+            value=preset_config.get("hinge_origin_x", 0.0) if preset_config else 0.0, step=0.5,
         )
-        hinge_angle_open = st.slider("Open Angle (°)", 0, 180, 90, step=5)
-        hinge_angle_close = st.slider("Closed Angle (°)", 0, 180, 0, step=5)
+        hinge_origin_y = st.number_input(
+            "Hinge Origin Y (mm)",
+            value=preset_config.get("hinge_origin_y", 0.0) if preset_config else 0.0, step=0.5,
+        )
+        hinge_origin_z = st.number_input(
+            "Hinge Origin Z (mm)",
+            value=preset_config.get("hinge_origin_z", 0.0) if preset_config else 0.0, step=0.5,
+        )
+
+        st.markdown("---")
+        st.subheader("Sensor Position")
+        sensor_x = st.number_input(
+            "Sensor X (mm)",
+            value=preset_config.get("sensor_x", 0.0) if preset_config else 0.0, step=0.5,
+        )
+        sensor_y = st.number_input(
+            "Sensor Y (mm)",
+            value=preset_config.get("sensor_y", 0.0) if preset_config else 0.0, step=0.5,
+        )
+        sensor_z = st.number_input(
+            "Sensor Z (mm)",
+            value=preset_config.get("sensor_z", 0.0) if preset_config else 0.0, step=0.5,
+        )
+
+        st.markdown("---")
+        st.subheader("Hinge Parameters")
+        hinge_radius = st.number_input(
+            "Hinge Arm Length (mm)",
+            value=preset_config.get("hinge_radius", 15.0) if preset_config else 15.0,
+            min_value=1.0, step=1.0,
+        )
+        hinge_angle_open = st.slider(
+            "Open Angle (°)", 0, 180,
+            int(preset_config.get("hinge_angle_open", 90)) if preset_config else 90,
+            step=5,
+        )
+        hinge_angle_close = st.slider(
+            "Closed Angle (°)", 0, 180,
+            int(preset_config.get("hinge_angle_close", 0)) if preset_config else 0,
+            step=5,
+        )
         hinge_plane = st.selectbox(
             "Hinge Rotation Plane",
             ["XZ (side hinge)", "YZ (top hinge)", "XY (flat spin)"],
+            index=["XZ (side hinge)", "YZ (top hinge)", "XY (flat spin)"].index(
+                preset_config.get("hinge_plane", "XZ (side hinge)")
+            ) if preset_config and preset_config.get("hinge_plane") in ["XZ (side hinge)", "YZ (top hinge)", "XY (flat spin)"] else 0,
         )
-        hinge_sensor_offset = st.number_input(
-            "Sensor Offset from Pivot (mm)", value=2.0, min_value=0.0, step=0.5
+        hinge_bounce = st.checkbox(
+            "Bounce (close → open → close)",
+            value=preset_config.get("hinge_bounce", True) if preset_config else True,
         )
-        hinge_bounce = st.checkbox("Bounce (close → open → close)", value=True)
 
 # --- Static Calculations ---
 magnet_obj, sensor_obj = get_magnet_and_sensor(shape, height, dims, remanence_g, z_air_gap)
@@ -604,6 +665,7 @@ if motion_type == "Position-Based":
         "start_pos": (start_x, start_y, start_z),
         "end_pos": (end_x, end_y, end_z),
     }
+    sensor_world_pos = (0, 0, 0)
 else:  # Hinge (Door/Lid)
     path_kwargs = {
         "hinge_radius": hinge_radius or 15.0,
@@ -611,10 +673,17 @@ else:  # Hinge (Door/Lid)
         "angle_close": hinge_angle_close or 0,
         "plane": hinge_plane or "XZ (side hinge)",
         "bounce": hinge_bounce if hinge_bounce is not None else True,
-        "sensor_offset": hinge_sensor_offset or 2.0,
+        "hinge_origin": (
+            hinge_origin_x or 0.0,
+            hinge_origin_y or 0.0,
+            hinge_origin_z or 0.0,
+        ),
     }
-
-sensor_world_pos = (0, 0, 0)
+    sensor_world_pos = (
+        sensor_x or 0.0,
+        sensor_y or 0.0,
+        sensor_z or 0.0,
+    )
 
 try:
     anim_path = generate_animation_path(motion_type, **path_kwargs)
@@ -754,6 +823,25 @@ else:
 
     with col_3d:
         st.caption("3D magnet path and sensor position")
+
+        # Calculate axis ranges for consistent view
+        all_points = np.vstack([anim_path, [list(sensor_world_pos)]])
+        if motion_type == "Hinge (Door/Lid)":
+            all_points = np.vstack([all_points, [[hinge_origin_x, hinge_origin_y, hinge_origin_z]]])
+        all_x, all_y, all_z = all_points[:, 0], all_points[:, 1], all_points[:, 2]
+        x_mid = (all_x.max() + all_x.min()) / 2
+        y_mid = (all_y.max() + all_y.min()) / 2
+        z_mid = (all_z.max() + all_z.min()) / 2
+        magnet_dim = max(height, dims if isinstance(dims, (int, float)) else max(dims))
+        padding = magnet_dim * 1.5
+        half_range = max(
+            (all_x.max() - all_x.min()) / 2,
+            (all_y.max() - all_y.min()) / 2,
+            (all_z.max() - all_z.min()) / 2,
+            magnet_dim,
+        ) + padding
+
+        # Create the base figure
         fig_path = go.Figure()
 
         fig_path.add_trace(go.Scatter3d(
@@ -766,9 +854,19 @@ else:
             name="Sensor",
         ))
 
+        # Hinge origin marker
         if motion_type == "Hinge (Door/Lid)":
             fig_path.add_trace(go.Scatter3d(
-                x=[0, anim_path[0, 0]], y=[0, anim_path[0, 1]], z=[0, anim_path[0, 2]],
+                x=[hinge_origin_x], y=[hinge_origin_y], z=[hinge_origin_z],
+                mode="markers", marker=dict(size=6, color="orange", symbol="x"),
+                name="Hinge Origin",
+            ))
+
+        if motion_type == "Hinge (Door/Lid)":
+            fig_path.add_trace(go.Scatter3d(
+                x=[hinge_origin_x, anim_path[0, 0]],
+                y=[hinge_origin_y, anim_path[0, 1]],
+                z=[hinge_origin_z, anim_path[0, 2]],
                 mode="lines", line=dict(color="orange", width=2), showlegend=False,
             ))
         else:
@@ -784,13 +882,16 @@ else:
         for t in init_traces:
             fig_path.add_trace(t)
 
-        magnet_trace_indices = list(range(3, 3 + len(init_traces)))
+        magnet_trace_indices = list(range(4 if motion_type == "Hinge (Door/Lid)" else 3, (4 if motion_type == "Hinge (Door/Lid)" else 3) + len(init_traces)))
 
+        # Build animation frames
         frames_3d = []
         for i in range(FRAMERATE):
             arm = (
                 go.Scatter3d(
-                    x=[0, anim_path[i, 0]], y=[0, anim_path[i, 1]], z=[0, anim_path[i, 2]],
+                    x=[hinge_origin_x, anim_path[i, 0]],
+                    y=[hinge_origin_y, anim_path[i, 1]],
+                    z=[hinge_origin_z, anim_path[i, 2]],
                     mode="lines", line=dict(color="orange", width=2), showlegend=False,
                 )
                 if motion_type == "Hinge (Door/Lid)"
@@ -803,25 +904,12 @@ else:
             )
             frames_3d.append(go.Frame(
                 data=[arm] + magnet_traces,
-                traces=[2] + magnet_trace_indices,
+                traces=[3] + magnet_trace_indices,
                 name=str(i),
             ))
 
         fig_path.frames = frames_3d
 
-        all_points = np.vstack([anim_path, [list(sensor_world_pos)]])
-        all_x, all_y, all_z = all_points[:, 0], all_points[:, 1], all_points[:, 2]
-        x_mid = (all_x.max() + all_x.min()) / 2
-        y_mid = (all_y.max() + all_y.min()) / 2
-        z_mid = (all_z.max() + all_z.min()) / 2
-        magnet_dim = max(height, dims if isinstance(dims, (int, float)) else max(dims))
-        padding = magnet_dim * 1.5
-        half_range = max(
-            (all_x.max() - all_x.min()) / 2,
-            (all_y.max() - all_y.min()) / 2,
-            (all_z.max() - all_z.min()) / 2,
-            magnet_dim,
-        ) + padding
 
         fig_path.update_layout(
             scene=dict(
@@ -830,17 +918,13 @@ else:
                 yaxis=dict(title="Y (mm)", range=[y_mid - half_range, y_mid + half_range]),
                 zaxis=dict(title="Z (mm)", range=[z_mid - half_range, z_mid + half_range]),
             ),
-            scene_camera=dict(
-                eye=dict(x=1.2, y=1.2, z=0.9),
-                center=dict(x=0, y=0, z=0),
-                up=dict(x=0, y=0, z=1),
-            ),
             margin=dict(l=0, r=0, t=30, b=0),
             height=500,
             updatemenus=play_pause_buttons,
             sliders=slider_layout,
         )
-        st.plotly_chart(fig_path, use_container_width=True)
+
+        st.plotly_chart(fig_path, use_container_width=True, key="plotly_3d")
 
     with col_2d:
         st.caption(f"Field components vs {x_axis_label}")
@@ -889,6 +973,7 @@ else:
             margin=dict(l=20, r=20, t=30, b=80),
             updatemenus=play_pause_buttons,
             sliders=slider_layout,
+            uirevision="keep"
         )
         st.plotly_chart(fig_field, use_container_width=True)
 
