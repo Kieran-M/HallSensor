@@ -719,7 +719,6 @@ else:
         else:
             angles_deg = np.linspace(hinge_angle_close, hinge_angle_open, FRAMERATE)
         x_axis_data, x_axis_label = angles_deg, "Hinge Angle (°)"
-        slider_prefix = "Angle: "
     else:  # Position-Based
         path_distances = np.zeros(FRAMERATE)
         for i in range(1, FRAMERATE):
@@ -734,26 +733,93 @@ else:
         if path_distances[-1] < 0.01 and total_rot > 0.01:
             rot_sweep = np.linspace(0, total_rot, FRAMERATE)
             x_axis_data, x_axis_label = rot_sweep, "Rotation Angle (°)"
-            slider_prefix = "Angle: "
         else:
             x_axis_data, x_axis_label = path_distances, "Distance (mm)"
-            slider_prefix = "Position: "
 
-    slider_steps = [
-        dict(
-            args=[
-                [str(i)],
-                dict(
-                    frame=dict(duration=FRAME_DURATION, redraw=True),
-                    mode="immediate",
-                    transition=dict(duration=0),
-                ),
-            ],
-            label=f"{x_axis_data[i]:.0f}"
-            + ("°" if motion_type == "Hinge (Door/Lid)" else ""),
-            method="animate",
+    if motion_type == "Hinge (Door/Lid)":
+        step_label = lambda i: f"{x_axis_data[i]:.0f}°"
+    else:
+        step_label = lambda i: f"{x_axis_data[i]:.0f} mm"
+
+    x_min = float(x_axis_data[0])
+    x_max = float(x_axis_data[-1])
+    x_range = x_max - x_min
+
+    # Define meaningful notch intervals based on the range
+    if motion_type == "Hinge (Door/Lid)":
+        # For angles: use 5° or 10° intervals depending on range
+        if x_range <= 45:
+            notch_interval = 5.0
+        elif x_range <= 90:
+            notch_interval = 10.0
+        else:
+            notch_interval = 15.0
+        suffix = "°"
+        prefix = "Angle: "
+    else:
+        # For distance: use 1mm intervals for short moves, 5mm for longer
+        if x_range <= 10:
+            notch_interval = 1.0
+        elif x_range <= 30:
+            notch_interval = 1.0
+        elif x_range <= 60:
+            notch_interval = 5.0
+        else:
+            notch_interval = 10.0
+        suffix = " mm"
+        prefix = "Position: "
+
+    # Generate notch positions
+    notch_positions = np.arange(
+        np.ceil(x_min / notch_interval) * notch_interval,
+        x_max + notch_interval * 0.5,
+        notch_interval
+    )
+
+    # For each notch, find the closest frame index
+    def find_nearest_frame(target_value):
+        """Find the frame index whose x_axis_data value is closest to target."""
+        idx = np.argmin(np.abs(x_axis_data - target_value))
+        return int(idx)
+
+    # Build slider steps - one per notch
+    slider_steps = []
+    for notch_val in notch_positions:
+        frame_idx = find_nearest_frame(notch_val)
+
+        # Format label: show value at meaningful intervals
+        if motion_type == "Hinge (Door/Lid)":
+            label_text = f"{notch_val:.0f}"
+        else:
+            # For distance, show integer mm values
+            label_text = f"{notch_val:.0f}"
+
+        slider_steps.append(
+            dict(
+                args=[
+                    [str(frame_idx)],
+                    dict(
+                        frame=dict(duration=0, redraw=True),
+                        mode="immediate",
+                        transition=dict(duration=0),
+                    ),
+                ],
+                label=label_text,
+                method="animate",
+            )
         )
-        for i in range(FRAMERATE)
+
+    slider_layout = [
+        dict(
+            active=0,
+            steps=slider_steps,
+            currentvalue=dict(
+                prefix=prefix,
+                suffix=suffix,
+                visible=True,
+            ),
+            pad=dict(t=50),
+        )
     ]
 
     play_pause_buttons = [
@@ -789,15 +855,6 @@ else:
                     ],
                 ),
             ],
-        )
-    ]
-
-    slider_layout = [
-        dict(
-            active=0,
-            steps=slider_steps,
-            currentvalue=dict(prefix=slider_prefix, visible=True),
-            pad=dict(t=50),
         )
     ]
 
