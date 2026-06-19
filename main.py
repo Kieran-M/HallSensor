@@ -741,81 +741,37 @@ else:
     else:
         step_label = lambda i: f"{x_axis_data[i]:.0f} mm"
 
-    x_min = float(x_axis_data[0])
-    x_max = float(x_axis_data[-1])
-    x_range = x_max - x_min
+    seen_vals = {}
+    for i in range(FRAMERATE):
+        val = int(round(x_axis_data[i]))
+        if val not in seen_vals:
+            seen_vals[val] = i  # first frame that hits this integer value
 
-    # Define meaningful notch intervals based on the range
-    if motion_type == "Hinge (Door/Lid)":
-        # For angles: use 5° or 10° intervals depending on range
-        if x_range <= 45:
-            notch_interval = 5.0
-        elif x_range <= 90:
-            notch_interval = 10.0
-        else:
-            notch_interval = 15.0
-        suffix = "°"
-        prefix = "Angle: "
-    else:
-        # For distance: use 1mm intervals for short moves, 5mm for longer
-        if x_range <= 10:
-            notch_interval = 1.0
-        elif x_range <= 30:
-            notch_interval = 1.0
-        elif x_range <= 60:
-            notch_interval = 5.0
-        else:
-            notch_interval = 10.0
-        suffix = " mm"
-        prefix = "Position: "
+    unique_vals = sorted(seen_vals.keys())
 
-    # Generate notch positions
-    notch_positions = np.arange(
-        np.ceil(x_min / notch_interval) * notch_interval,
-        x_max + notch_interval * 0.5,
-        notch_interval
-    )
-
-    # For each notch, find the closest frame index
-    def find_nearest_frame(target_value):
-        """Find the frame index whose x_axis_data value is closest to target."""
-        idx = np.argmin(np.abs(x_axis_data - target_value))
-        return int(idx)
-
-    # Build slider steps - one per notch
-    slider_steps = []
-    for notch_val in notch_positions:
-        frame_idx = find_nearest_frame(notch_val)
-
-        # Format label: show value at meaningful intervals
-        if motion_type == "Hinge (Door/Lid)":
-            label_text = f"{notch_val:.0f}"
-        else:
-            # For distance, show integer mm values
-            label_text = f"{notch_val:.0f}"
-
-        slider_steps.append(
-            dict(
-                args=[
-                    [str(frame_idx)],
-                    dict(
-                        frame=dict(duration=0, redraw=True),
-                        mode="immediate",
-                        transition=dict(duration=0),
-                    ),
-                ],
-                label=label_text,
-                method="animate",
-            )
+    slider_steps = [
+        dict(
+            args=[
+                [str(seen_vals[val])],
+                dict(
+                    frame=dict(duration=FRAME_DURATION, redraw=True),
+                    mode="immediate",
+                    transition=dict(duration=0),
+                ),
+            ],
+            label=f"{val}" if motion_type == "Hinge (Door/Lid)" else f"{val}",
+            method="animate",
         )
+        for val in unique_vals
+    ]
 
     slider_layout = [
         dict(
             active=0,
             steps=slider_steps,
             currentvalue=dict(
-                prefix=prefix,
-                suffix=suffix,
+                prefix="Angle: " if motion_type == "Hinge (Door/Lid)" else "Position: ",
+                suffix="°" if motion_type == "Hinge (Door/Lid)" else " mm",
                 visible=True,
             ),
             pad=dict(t=50),
